@@ -1952,6 +1952,16 @@ export const AGENT_IPC_CHANNELS = {
   // 待处理请求恢复（渲染进程重载后查询主进程状态）
   /** 获取所有待处理的交互请求快照 */
   GET_PENDING_REQUESTS: 'agent:get-pending-requests',
+
+  // 会话进程面板（右侧工作区聚合视图，见 docs/plans/2026-08-27-session-process-panel.md）
+  /** 拉取指定会话的进程记录列表 */
+  LIST_SESSION_PROCESSES: 'agent:processes:list',
+  /** 增量拉取指定进程的输出缓冲 */
+  GET_SESSION_PROCESS_OUTPUT: 'agent:processes:output',
+  /** 终止单个进程 */
+  KILL_SESSION_PROCESS: 'agent:processes:kill',
+  /** 进程登记/状态变更/移除事件推送（main → renderer） */
+  SESSION_PROCESS_EVENT: 'agent:processes:event',
 } as const
 
 /**
@@ -1965,3 +1975,62 @@ export interface PendingRequestsSnapshot {
   /** 待处理的 ExitPlanMode 请求 */
   exitPlans: ExitPlanModeRequest[]
 }
+
+// ===== 会话进程面板 =====
+
+/** 会话进程来源：Agent 执行的命令 / 终端。 */
+export type SessionProcessKind = 'command' | 'terminal'
+
+/** 会话进程状态：运行中 / 正常退出（含超时，带退出码）/ 被用户终止。 */
+export type SessionProcessStatus = 'running' | 'exited' | 'killed'
+
+/**
+ * 进程面板的单条记录（内存态，不持久化；应用重启后不恢复）。
+ * 命令进程的 processId 由主进程生成（exec 上下文无 toolcall id，不做键关联）；终端的 processId 即 terminalId。
+ */
+export interface SessionProcessInfo {
+  /** 进程记录唯一 id；终端类与 terminalId 相同。 */
+  processId: string
+  sessionId: string
+  kind: SessionProcessKind
+  /** 列表显示名：命令摘要（超长截断 ellipsis）或终端标题。 */
+  title: string
+  status: SessionProcessStatus
+  /** 启动时间（epoch ms）。 */
+  startedAt: number
+  /** 结束时间（epoch ms）；running 时缺省。 */
+  endedAt?: number
+  /** OS 进程 id；底层可得时提供（两条 shell 路径与 PTY 均可得）。 */
+  pid?: number
+  /** 退出码；仅 exited 提供，killed 不填。 */
+  exitCode?: number
+  /** 超时被杀标记；仅命令进程可能为 true。 */
+  timedOut?: boolean
+  /** 终端类记录对应右侧独立 tab 的 terminalId。 */
+  terminalId?: string
+}
+
+/** 进程输出增量拉取请求。 */
+export interface SessionProcessOutputRequest {
+  sessionId: string
+  processId: string
+  /** 从输出缓冲的第几个字节开始拉取；0 表示从头。 */
+  offset: number
+}
+
+/** 进程输出增量拉取响应；data 为 UTF-8 解码后的文本片段。 */
+export interface SessionProcessOutputChunk {
+  /** 返回的数据起点（字节）。 */
+  offset: number
+  /** 下一次应传入的 offset；等于当前缓冲末尾。 */
+  nextOffset: number
+  /** 缓冲是否因环形上限丢弃过早期内容。 */
+  truncated: boolean
+  data: string
+}
+
+/** 进程状态变更事件（main → renderer 推送）。 */
+export type SessionProcessEvent =
+  | { type: 'registered'; process: SessionProcessInfo }
+  | { type: 'updated'; process: SessionProcessInfo }
+  | { type: 'removed'; sessionId: string; processId: string }
