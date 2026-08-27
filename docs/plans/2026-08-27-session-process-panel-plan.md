@@ -506,7 +506,14 @@ interface ProcessesPanelProps { sessionId: string }
 
 ## 实现期笔记
 
-### 2026-08-27 Task 0（环境基线）
+### 2026-08-28 实施结论（Task 0-9）
+
+- **架构演进**：utility 进程随 query 结束被 kill，进程数据不能只住 utility → 最终采用「**事件流 + main 镜像**」：utility 侧 tracker 推 registered/updated/output 事件，main 侧 SessionProcessService（ProcessRegistry + OutputRingBuffer）做权威渲染数据源；KILL 在 query 活跃时经 PiUtilityAdapter.killProcess 转发 utility 执行真实 kill，镜像先标 killed 保证 UI 即时响应。
+- **终端不进 main registry**：renderer 端 ProcessesPanel 直接从 agentTerminalTabsAtom 合成终端行（活着的终端即 running），kill 走现有 killTerminal 链路，FR1.4 同源语义天然满足。
+- **终止语义收敛**：close(null, signal) 统一记 killed（涵盖用户终止/abort/超时，未区分 timedOut 字段）；exitCode 仅 exited 提供。
+- **in-process 模式（PROMA_AGENT_RUNTIME=in-process/off，实验性）暂不接入命令进程追踪**，终端面板不受影响；已留接线点（tracker 构造参数已支持任意 registry）。
+- **验证状态**：typecheck 全绿；全仓 544 测试仅 1 个既有失败（session-core planning 数据库，上游既有）；build:main / build:preload / build:renderer 全部通过（27.22s vite）。`electron:build` 完整打包受 build:cli（bun compile 打 CLI 二进制）的「Failed to get temp file path」环境问题阻塞，与本功能改动无关，待环境解决后补跑完整打包冒烟；需求文档 §9 六个 BDD 场景待 `bun run dev` 手动冒烟（UI 层人工验证项）。
+- **提交链**：6d9c12f3 (shared 类型) → ba14bce0 (registry) → be3f01db (追踪+IPC+preload) → 536c5cfe (聚合面板 UI)。
 
 - `bun install` 通过（813 包）；`bun run typecheck` 全绿。
 - `bun test` 基线：515 pass / **1 fail** —— `@proma/session-core` 的 planning 数据库测试（isolation/transactions/reminders/optimistic versions）为上游既有失败，本地无任何代码改动，与本功能无关，排除在本功能验证范围外，不修复（避免无关变更）。
