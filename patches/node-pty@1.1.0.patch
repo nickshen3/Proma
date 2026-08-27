@@ -1,3 +1,12 @@
+diff --git a/node_modules/node-pty/.bun-tag-5c6323a541d36b2d b/.bun-tag-5c6323a541d36b2d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/node-pty/.bun-tag-6b9208d9664e7b99 b/.bun-tag-6b9208d9664e7b99
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/node-pty/.bun-tag-be983506a52fbbca b/.bun-tag-be983506a52fbbca
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/lib/unixTerminal.js b/lib/unixTerminal.js
 index 1ec12f796a822c78fba9ad7f6448c3987e325c23..cda1592b83b1d464fbfaee850eca8daa3c9ae8c8 100644
 --- a/lib/unixTerminal.js
@@ -15,9 +24,6 @@ index 1ec12f796a822c78fba9ad7f6448c3987e325c23..cda1592b83b1d464fbfaee850eca8daa
  var DEFAULT_FILE = 'sh';
  var DEFAULT_NAME = 'xterm';
  var DESTROY_SOCKET_TIMEOUT_MS = 200;
-diff --git a/prebuilds/darwin-arm64/spawn-helper b/prebuilds/darwin-arm64/spawn-helper
-old mode 100644
-new mode 100755
 diff --git a/src/unixTerminal.ts b/src/unixTerminal.ts
 index 98733dc0cd752b554bd94e45904ca341ad141bba..5844ccf314a4352fbe80ee06ba8b8ddb0b931c92 100644
 --- a/src/unixTerminal.ts
@@ -35,3 +41,15 @@ index 98733dc0cd752b554bd94e45904ca341ad141bba..5844ccf314a4352fbe80ee06ba8b8ddb
  
  const DEFAULT_FILE = 'sh';
  const DEFAULT_NAME = 'xterm';
+diff --git a/binding.gyp b/binding.gyp
+--- a/binding.gyp
++++ b/binding.gyp
+@@ -6,7 +6,7 @@
+     'conditions': [
+       ['OS=="win"', {
+         'msvs_configuration_attributes': {
+-          'SpectreMitigation': 'Spectre'
++          'SpectreMitigation': 'false'
+         },
+         'msvs_settings': {
+             'VCCLCompilerTool': {
