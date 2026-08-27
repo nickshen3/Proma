@@ -281,7 +281,7 @@ import {
   searchAgentSessionMessages,
   searchAgentSessionReferences,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, listActiveAgentSessionSnapshots, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession } from './lib/agent-service'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, listActiveAgentSessionSnapshots, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, agentSessionProcessService } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -1023,6 +1023,23 @@ export function registerIpcHandlers(): void {
       throw new Error('仅主窗口可以操作本地终端。')
     }
   }
+
+  // ===== 会话进程面板（命令进程镜像查询与终止；事件广播见下方订阅） =====
+  ipcMain.handle(AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES, (_event, sessionId: string) => {
+    return agentSessionProcessService.list(sessionId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_SESSION_PROCESS_OUTPUT, (_event, input: { sessionId: string, processId: string, offset: number }) => {
+    return agentSessionProcessService.readOutput(input.sessionId, input.processId, input.offset)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.KILL_SESSION_PROCESS, async (_event, input: { sessionId: string, processId: string }) => {
+    return agentSessionProcessService.kill(input.sessionId, input.processId)
+  })
+  agentSessionProcessService.onEvent((event) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(AGENT_IPC_CHANNELS.SESSION_PROCESS_EVENT, event)
+    }
+  })
+
   ipcMain.handle(TERMINAL_IPC_CHANNELS.CREATE, async (event, input) => {
     assertMainTerminalRenderer(event.sender.id)
     if (!input.sessionId || !getAgentSessionMeta(input.sessionId)) {

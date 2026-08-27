@@ -1,0 +1,74 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-93d0ee7c2a7073c b/.bun-tag-93d0ee7c2a7073c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/core/tools/bash.d.ts b/dist/core/tools/bash.d.ts
+index 7fcbe2435afa926ae3f76fc8f915f6e66d7c7667..e73b3eb8523addf2280e6d42c87df5a53a7e2ff3 100644
+--- a/dist/core/tools/bash.d.ts
++++ b/dist/core/tools/bash.d.ts
+@@ -32,6 +32,14 @@ export interface BashOperations {
+         signal?: AbortSignal;
+         timeout?: number;
+         env?: NodeJS.ProcessEnv;
++        /** Proma patch: invoked right after the child process is spawned (proma-mark: session-process-panel). */
++        onSpawn?: (child: import("child_process").ChildProcess, context: {
++            command: string;
++            cwd: string;
++            toolCallId?: string;
++        }) => void;
++        /** Proma patch: tool call id propagated from the tool execution (proma-mark: session-process-panel). */
++        toolCallId?: string;
+     }) => Promise<{
+         exitCode: number | null;
+     }>;
+@@ -62,6 +70,12 @@ export interface BashToolOptions {
+     exposeSessionEnvironment?: boolean;
+     /** Hook to adjust command, cwd, or env before execution */
+     spawnHook?: BashSpawnHook;
++    /** Proma patch: observe spawned child processes for the session process panel (proma-mark). */
++    onSpawnProcess?: (child: import("child_process").ChildProcess, context: {
++        command: string;
++        cwd: string;
++        toolCallId?: string;
++    }) => void;
+ }
+ type BashRenderState = {
+     startedAt: number | undefined;
+diff --git a/dist/core/tools/bash.js b/dist/core/tools/bash.js
+index 3cc6873d7be9b37b59174a471112947814de90d5..483f69b48c68d17488f1f8b65efee7197198ef62 100644
+--- a/dist/core/tools/bash.js
++++ b/dist/core/tools/bash.js
+@@ -43,7 +43,7 @@ export const bashToolSystemPromptContribution = {
+  */
+ export function createLocalBashOperations(options) {
+     return {
+-        exec: async (command, cwd, { onData, signal, timeout, env }) => {
++        exec: async (command, cwd, { onData, signal, timeout, env, onSpawn, toolCallId }) => {
+             const timeoutMs = resolveTimeoutMs(timeout);
+             if (signal?.aborted) {
+                 throw new Error("aborted");
+@@ -67,6 +67,7 @@ export function createLocalBashOperations(options) {
+                 child.stdin?.on("error", () => { });
+                 child.stdin?.end(command);
+             }
++            onSpawn?.(child, { command, cwd, toolCallId });
+             if (child.pid)
+                 trackDetachedChildPid(child.pid);
+             let timedOut = false;
+@@ -236,7 +237,7 @@ export function createBashToolDefinition(cwd, options) {
+         promptGuidelines: exposeSessionEnvironment ? [...bashToolSystemPromptContribution.guidelines] : undefined,
+         parameters: bashSchema,
+         constrainedSampling: getExperimentalToolSampling(),
+-        async execute(_toolCallId, { command, timeout }, signal, onUpdate, ctx) {
++        async execute(toolCallId, { command, timeout }, signal, onUpdate, ctx) {
+             const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+             const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, exposeSessionEnvironment, ctx);
+             const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
+@@ -327,6 +328,8 @@ export function createBashToolDefinition(cwd, options) {
+                         signal,
+                         timeout,
+                         env: spawnContext.env,
++                        onSpawn: options?.onSpawnProcess,
++                        toolCallId,
+                     });
+                     exitCode = result.exitCode;
+                 }

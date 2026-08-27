@@ -38,6 +38,13 @@ export class ProcessRegistry {
     return [...(this.entries.get(sessionId)?.values() ?? [])].map((entry) => ({ ...entry.process }))
   }
 
+  /** 移除单条记录（不触发终止；用于会话删除清理前的逐条 removed 事件）。 */
+  remove(sessionId: string, processId: string): boolean {
+    const byId = this.entries.get(sessionId)
+    if (!byId) return false
+    return byId.delete(processId)
+  }
+
   /** 终止单个活跃进程；不存在或已终态时返回 false。 */
   terminate(sessionId: string, processId: string): boolean {
     const entry = this.entries.get(sessionId)?.get(processId)

@@ -16,6 +16,7 @@ import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import type { SessionProcessEvent } from '@proma/shared'
 import type {
   AgentSendInput,
   AgentGenerateTitleInput,
@@ -36,6 +37,7 @@ import type {
   AgentMessage,
 } from '@proma/shared'
 import { PiAgentAdapter } from './adapters/pi-agent-adapter'
+import { SessionProcessService } from './session-process-service'
 import { PiUtilityAdapter } from './adapters/pi-utility-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
@@ -56,10 +58,24 @@ const eventBus = new AgentEventBus()
 const useUtilityAgentRuntime = process.env.PROMA_AGENT_RUNTIME !== 'in-process'
   && process.env.PROMA_AGENT_RUNTIME !== 'off'
 const adapter = useUtilityAgentRuntime ? new PiUtilityAdapter() : new PiAgentAdapter()
+
+// 会话进程面板：utility 模式下镜像命令进程事件流到 main（见 docs/plans/2026-08-27-session-process-panel-plan.md）。
+// in-process 模式（实验性）暂不接入命令进程追踪，终端部分不受影响。
+const sessionProcessService = new SessionProcessService(
+  useUtilityAgentRuntime
+    ? (sessionId, processId) => (adapter as PiUtilityAdapter).killProcess(sessionId, processId)
+    : undefined,
+)
+if (useUtilityAgentRuntime) {
+  ;(adapter as PiUtilityAdapter).onProcessEvent((event) => sessionProcessService.ingest(event as SessionProcessEvent))
+}
+
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
+/** 导出进程面板服务供 IPC 层查询/终止/订阅事件 */
+export { sessionProcessService as agentSessionProcessService }
 
 // 注册协作子会话 EventBus 阻塞事件监听
 import('./agent-collaboration-tools').then(({ registerCollaborationEventBus }) => {

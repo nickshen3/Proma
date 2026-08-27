@@ -12,6 +12,8 @@ import {
   type AgentRuntimeState,
 } from '@proma/shared'
 import { PiAgentAdapter, type PiAgentQueryOptions } from '../main/lib/adapters/pi-agent-adapter'
+import { CommandProcessTracker } from '../main/lib/adapters/command-process-tracker'
+import { ProcessRegistry } from '../main/lib/process-registry'
 import { getParentRequestTimeoutMs } from './agent-runtime-request-timeout'
 
 type MessagePortLike = {
@@ -48,7 +50,11 @@ let activeQuery: ActiveQuery | undefined
 const parentRequests = new Map<string, PendingParentRequest>()
 const capabilityAbortControllers = new Map<string, AbortController>()
 const piAdapter = new PiAgentAdapter()
+// 会话进程面板：命令进程的登记与输出缓冲存在于 utility 进程，经事件流镜像到 main（见 docs/plans/2026-08-27-session-process-panel-plan.md）。
+const processRegistry = new ProcessRegistry()
+let processTracker: CommandProcessTracker | undefined
 const parentPort = (process as typeof process & { parentPort?: ParentPortLike }).parentPort
+let activeProcessTrackerSessionId: string | undefined
 
 if (!parentPort) {
   console.error('[AgentRuntime] Electron parentPort is unavailable')
@@ -142,6 +148,9 @@ function handleMessage(rawMessage: unknown): void {
     case AGENT_RUNTIME_METHODS.QUERY_SET_PERMISSION_MODE:
       void handleSetPermissionMode(request)
       return
+    case AGENT_RUNTIME_METHODS.PROCESS_KILL:
+      handleProcessKill(request)
+      return
     default:
       respondError(request, { code: 'runtime.method_not_found', message: `Unsupported runtime method: ${request.method}` })
   }
@@ -173,6 +182,18 @@ function handleQueryStart(request: RuntimeRequest): void {
   emitState()
   respond(request, { accepted: true, queryId })
 
+  // 每个会话的命令进程追踪器：事件流镜像到 main；registry 模块级以跨 query 保留终态记录。
+  if (!processTracker || activeProcessTrackerSessionId !== sessionId) {
+    processTracker = new CommandProcessTracker({
+      registry: processRegistry,
+      sessionId,
+      onEvent: (event) => sendEvent(AGENT_RUNTIME_METHODS.EVENT_PROCESS, event),
+      onOutput: (event) => sendEvent(AGENT_RUNTIME_METHODS.EVENT_PROCESS, event),
+    })
+    activeProcessTrackerSessionId = sessionId
+  }
+
+
   const utilityInput = {
     ...queryInput,
     canUseTool: (toolName: string, toolInput: Record<string, unknown>, options: Record<string, unknown>) => requestParent(
@@ -196,6 +217,7 @@ function handleQueryStart(request: RuntimeRequest): void {
     ),
   }
   ;(utilityInput as Record<string, unknown>).customTools = createProxyCustomTools(active, queryInput.customTools)
+  ;(utilityInput as Record<string, unknown>).processTracker = processTracker
   void pumpQuery(active, utilityInput as unknown as PiAgentQueryOptions)
 }
 
@@ -292,6 +314,17 @@ async function handleSetPermissionMode(request: RuntimeRequest): Promise<void> {
   }
   await piAdapter.setPermissionMode(activeQuery.sessionId, payload.mode)
   respond(request, { accepted: true })
+}
+
+function handleProcessKill(request: RuntimeRequest): void {
+  const payload = request.payload ?? {}
+  const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
+  const processId = typeof payload.processId === 'string' ? payload.processId : ''
+  if (!sessionId || !processId) {
+    respondError(request, { code: 'agent.process.invalid_input', message: 'sessionId and processId are required' })
+    return
+  }
+  respond(request, { accepted: processRegistry.terminate(sessionId, processId) })
 }
 
 async function handleShutdown(request: RuntimeRequest): Promise<void> {

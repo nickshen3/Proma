@@ -99,6 +99,26 @@ export class PiUtilityAdapter {
     }
   }
 
+  private readonly processEventListeners = new Set<(event: unknown) => void>()
+
+  /** 注册会话进程事件（utility 镜像流）监听；返回取消订阅函数。 */
+  onProcessEvent(listener: (event: unknown) => void): () => void {
+    this.processEventListeners.add(listener)
+    return () => this.processEventListeners.delete(listener)
+  }
+
+  /** 转发终止命令进程到该会话的 utility runtime；无活跃 query 时返回 false。 */
+  async killProcess(sessionId: string, processId: string): Promise<boolean> {
+    const pending = this.findPending(sessionId)
+    if (!pending) return false
+    const result = await pending.client.call<{ accepted: boolean }>(
+      AGENT_RUNTIME_METHODS.PROCESS_KILL,
+      { sessionId, processId },
+      { queryId: pending.queryId },
+    )
+    return result.accepted === true
+  }
+
   abort(sessionId: string): void {
     // A recovery iterator can be late to release its runtime. Abort every
     // matching query rather than assuming the first map entry owns the session.
@@ -236,6 +256,12 @@ export class PiUtilityAdapter {
   }
 
   private handleRuntimeEvent(event: AgentRuntimeEvent): void {
+    if (event.method === AGENT_RUNTIME_METHODS.EVENT_PROCESS) {
+      for (const listener of this.processEventListeners) {
+        try { listener(event.payload) } catch (error) { console.warn('[PiUtilityAdapter] process event listener failed:', error) }
+      }
+      return
+    }
     if (event.method === AGENT_RUNTIME_METHODS.EVENT_CRASHED) {
       const error = toRuntimeError(event.payload)
       const failed = Array.from(this.pendingQueries.values())

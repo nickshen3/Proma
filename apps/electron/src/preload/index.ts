@@ -159,6 +159,10 @@ import type {
   TerminalOutputAck,
   TerminalSnapshot,
   TerminalExitEvent,
+  SessionProcessInfo,
+  SessionProcessEvent,
+  SessionProcessOutputChunk,
+  SessionProcessOutputRequest,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -218,6 +222,12 @@ export interface ElectronAPI {
   onAgentTerminalClose: (callback: (event: AgentTerminalCloseEvent) => void) => () => void
   onTerminalOutput: (callback: (event: TerminalOutputEvent) => void) => () => void
   onTerminalExit: (callback: (event: TerminalExitEvent) => void) => () => void
+
+  // ===== 会话进程面板 =====
+  listSessionProcesses: (sessionId: string) => Promise<SessionProcessInfo[]>
+  getSessionProcessOutput: (input: SessionProcessOutputRequest) => Promise<SessionProcessOutputChunk>
+  killSessionProcess: (input: { sessionId: string, processId: string }) => Promise<boolean>
+  onSessionProcessEvent: (callback: (event: SessionProcessEvent) => void) => () => void
 
   /**
    * 获取指定目录的 Git 仓库状态
@@ -1319,6 +1329,22 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, event: AgentTerminalCloseEvent): void => callback(event)
     ipcRenderer.on(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, listener)
     return () => ipcRenderer.removeListener(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, listener)
+  },
+
+  // ===== 会话进程面板 =====
+  listSessionProcesses: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSION_PROCESSES, sessionId)
+  },
+  getSessionProcessOutput: (input: SessionProcessOutputRequest) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_PROCESS_OUTPUT, input)
+  },
+  killSessionProcess: (input: { sessionId: string, processId: string }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.KILL_SESSION_PROCESS, input)
+  },
+  onSessionProcessEvent: (callback: (event: SessionProcessEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: SessionProcessEvent): void => callback(event)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.SESSION_PROCESS_EVENT, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.SESSION_PROCESS_EVENT, listener)
   },
   onTerminalOutput: (callback: (event: TerminalOutputEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, event: TerminalOutputEvent): void => callback(event)

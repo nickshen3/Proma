@@ -2029,8 +2029,12 @@ export interface SessionProcessOutputChunk {
   data: string
 }
 
-/** 进程状态变更事件（main → renderer 推送）。 */
+/**
+ * 进程状态变更事件（utility/main → renderer 推送）。
+ * utility 侧产生 registered/updated/output；main 侧镜像后原样转发给 renderer。
+ */
 export type SessionProcessEvent =
   | { type: 'registered'; process: SessionProcessInfo }
   | { type: 'updated'; process: SessionProcessInfo }
+  | { type: 'output'; sessionId: string; processId: string; data: string }
   | { type: 'removed'; sessionId: string; processId: string }

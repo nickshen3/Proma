@@ -158,6 +158,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   transport?: PiAgentTransport
   /** HTTP 头/响应体空闲超时，单位毫秒；0 表示交给 Pi SDK 禁用超时 */
   httpIdleTimeoutMs?: number
+  /** 会话进程面板：命令进程追踪器（utility 侧按会话构造注入；仅在 utility 进程内存内传递，不跨进程序列化）。 */
+  processTracker?: import('./command-process-tracker').CommandProcessTracker
   /** WebSocket 建连超时，单位毫秒；0 表示交给 Pi SDK 禁用超时 */
   websocketConnectTimeoutMs?: number
   runtimeEnv?: AgentRuntimeEnv
@@ -1134,7 +1136,7 @@ export function buildWslBashArgs(
   ]
 }
 
-function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
+function createWslBashOperations(runtimeEnv: AgentRuntimeEnv, tracker?: import('./command-process-tracker').CommandProcessTracker): BashOperations {
   return {
     exec(command, cwd, options) {
       return new Promise((resolve, reject) => {
@@ -1145,6 +1147,7 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
         })
+        tracker?.handleSpawn(child, { command, cwd, toolCallId: options.toolCallId })
         let settled = false
         let timedOut = false
         let timeoutHandle: NodeJS.Timeout | undefined
@@ -1199,8 +1202,12 @@ function createWslBashOperations(runtimeEnv: AgentRuntimeEnv): BashOperations {
   }
 }
 
-function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): BashToolOptions | undefined {
+function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined, tracker?: import('./command-process-tracker').CommandProcessTracker): BashToolOptions | undefined {
   if (!runtimeEnv) return undefined
+
+  const onSpawnProcess = tracker
+    ? (child: import('node:child_process').ChildProcess, context: { command: string, cwd: string, toolCallId?: string }) => tracker.handleSpawn(child, context)
+    : undefined
 
   const spawnHook: NonNullable<BashToolOptions['spawnHook']> = ({ command, cwd, env }) => ({
     command,
@@ -1210,7 +1217,7 @@ function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): Ba
 
   if (runtimeEnv.shellKind === 'wsl') {
     return {
-      operations: createWslBashOperations(runtimeEnv),
+      operations: createWslBashOperations(runtimeEnv, tracker),
       spawnHook,
     }
   }
@@ -1218,6 +1225,7 @@ function createPromaBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): Ba
   return {
     ...(runtimeEnv.shellPath && { shellPath: runtimeEnv.shellPath }),
     spawnHook,
+    ...(onSpawnProcess && { onSpawnProcess }),
   }
 }
 
@@ -1235,11 +1243,12 @@ function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
+  processTracker?: import('./command-process-tracker').CommandProcessTracker,
 ): ToolDefinition[] {
   const definitions = [
     sdk.createReadToolDefinition(cwd),
     ...(isPiBashToolAvailable(process.platform, runtimeEnv)
-      ? [sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv))]
+      ? [sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(runtimeEnv, processTracker))]
       : []),
     sdk.createEditToolDefinition(cwd),
     sdk.createWriteToolDefinition(cwd),
@@ -1392,6 +1401,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           cwd,
           input.canUseTool,
           input.runtimeEnv,
+          input.processTracker,
         ),
         ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
