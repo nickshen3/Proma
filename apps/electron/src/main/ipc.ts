@@ -2322,6 +2322,8 @@ export function registerIpcHandlers(): void {
       clearAgentQueuedMessages(id)
       await browserController.close(id)
       closeTerminalsForSession(id)
+      // 会话进程面板：终止活跃命令进程并清理记录
+      await agentSessionProcessService.killAndClearSession(id)
       deleteAgentSession(id)
       releaseAttachedFileWatchers(attachedFiles)
     }

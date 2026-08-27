@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { X, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, GitBranch, GitMerge, MessageSquarePlus, FileDiff, FileText, FolderOpen, Globe, MessageCircle, Brain, Split, Blocks, CalendarDays, ListTodo, Clock, ServerCog, SquareTerminal } from 'lucide-react'
+import { X, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, GitBranch, GitMerge, MessageSquarePlus, FileDiff, FileText, FolderOpen, Globe, MessageCircle, Brain, Split, Blocks, CalendarDays, ListTodo, Clock, ServerCog, SquareTerminal, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -57,6 +57,8 @@ import {
   agentSessionDraftHtmlAtom,
   agentTerminalTabsAtom,
 } from '@/atoms/agent-atoms'
+import { agentProcessesAtom } from '@/atoms/session-process-atoms'
+import { ProcessesPanel } from './ProcessesPanel'
 import {
   getBrowserSidePanelTab,
   getBrowserTabIdFromSidePanelTab,
@@ -664,8 +666,13 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const setSideDelegationMap = useSetAtom(agentSideDelegationMapAtom)
   const sideDelegationSessionIds = sideDelegationMap.get(sessionId) ?? []
   const terminalTabsMap = useAtomValue(agentTerminalTabsAtom)
+  const commandProcesses = useAtomValue(agentProcessesAtom)
   const setTerminalTabsMap = useSetAtom(agentTerminalTabsAtom)
   const terminalTabs = terminalTabsMap.get(sessionId) ?? []
+  const activeProcessCount = React.useMemo(() => {
+    const runningCommands = (commandProcesses.get(sessionId) ?? []).filter(row => row.status === 'running').length
+    return runningCommands + terminalTabs.length
+  }, [commandProcesses, sessionId, terminalTabs.length])
   const activeTerminalId = getTerminalIdFromSidePanelTab(activeTab)
   const activeDelegationSessionId = getDelegationSessionIdFromSidePanelTab(activeTab)
   const activeDelegationSession = activeDelegationSessionId
@@ -995,6 +1002,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const workspaceTabs = React.useMemo<WorkspacePanelTab[]>(() => [
     { id: 'files', label: '文件', icon: <FolderOpen className="size-3.5" /> },
     { id: 'changes', label: '改动', icon: <FileDiff className="size-3.5" /> },
+    { id: 'processes', label: '进程', icon: <Cpu className="size-3.5" />, badge: activeProcessCount },
     ...workspaceComponentTabs.map((component) => {
       const meta: Record<WorkspaceComponentTab, { label: string; icon: React.ReactNode }> = {
         todos: { label: 'Todo', icon: <ListTodo className="size-3.5" /> },
@@ -1216,6 +1224,11 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             ) : (
               <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">等待项目初始化...</div>
             )
+          ) : effectiveActiveTab === 'processes' ? (
+            <ProcessesPanel
+              sessionId={sessionId}
+              onOpenTerminalTab={(terminalId) => onTabChange(getTerminalSidePanelTab(terminalId))}
+            />
           ) : effectiveActiveTab === 'changes' ? (
             sessionPath ? (
               <DiffChangesList

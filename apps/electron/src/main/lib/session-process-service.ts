@@ -68,6 +68,21 @@ export class SessionProcessService {
     return true
   }
 
+  /** 会话删除：标记镜像终态 + 转发 utility 真实终止 + 清空记录，并广播 removed 事件。 */
+  async killAndClearSession(sessionId: string): Promise<void> {
+    const rows = this.registry.list(sessionId)
+    for (const row of rows) {
+      if (row.status !== 'running') continue
+      this.registry.terminate(sessionId, row.processId)
+      if (this.killForwarder) {
+        try { await this.killForwarder(sessionId, row.processId) } catch (error) {
+          console.warn('[SessionProcess] session cleanup kill forward failed:', error)
+        }
+      }
+    }
+    this.clearSession(sessionId)
+  }
+
   /** 会话删除：终止活跃进程并清空记录与缓冲。 */
   clearSession(sessionId: string): void {
     for (const row of this.registry.list(sessionId)) {

@@ -67,6 +67,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
+import { agentProcessesAtom, applySessionProcessEvent } from '@/atoms/session-process-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
@@ -1434,6 +1435,13 @@ export function useGlobalAgentListeners(): void {
       streamEventBatcher.push(streamEvent)
     })
 
+    // ===== 会话进程面板：命令进程事件流镜像 =====
+    const cleanupProcessEvents = window.electronAPI.onSessionProcessEvent((event) => {
+      unstable_batchedUpdates(() => {
+        store.set(agentProcessesAtom, previous => applySessionProcessEvent(previous, event))
+      })
+    })
+
     // ===== 2. 流式完成 =====
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
@@ -1830,6 +1838,7 @@ export function useGlobalAgentListeners(): void {
 
     return () => {
       cleanupEvent()
+      cleanupProcessEvents()
       streamEventBatcher.dispose()
       unsubscribeVisibleSession()
       cleanupComplete()

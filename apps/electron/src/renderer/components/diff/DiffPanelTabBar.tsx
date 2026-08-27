@@ -26,6 +26,8 @@ export interface WorkspacePanelTab {
   icon: React.ReactNode
   closable?: boolean
   activity?: boolean
+  /** 数量徽标（如进程面板的活跃进程数）；未定义时不显示。 */
+  badge?: number
 }
 
 interface DiffPanelTabBarProps {
@@ -135,6 +137,11 @@ export function DiffPanelTabBar({
                     <span className={cn('shrink-0', selected ? 'text-foreground' : 'text-muted-foreground/80')}>{tab.icon}</span>
                   )}
                   <span className="truncate">{tab.label}</span>
+                  {typeof tab.badge === 'number' && tab.badge > 0 && (
+                    <span className="ml-auto shrink-0 rounded-full bg-primary/15 px-1.5 text-[10px] leading-4 text-primary" aria-label={`活跃进程 ${tab.badge}`}>
+                      {tab.badge}
+                    </span>
+                  )}
                 </button>
                 {tab.closable && (
                   <button
