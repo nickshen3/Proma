@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -213,7 +213,7 @@ describe('Agent 会话 runtime 元数据', () => {
     expect(implicitlyMigrated?.legacyTranscript).toEqual({ sourceRuntime: 'claude', continuationRequired: true })
     await expect(manager.forkAgentSession({ sessionId: 'legacy-claude-session', upToMessageUuid: 'assistant-1' }))
       .rejects.toThrow('历史 Claude transcript 为只读')
-    await expect(manager.rewindPiAgentSession('legacy-claude-session', 'assistant-1'))
+    await expect(manager.rewindPiAgentSession('legacy-claude-session', { kind: 'assistant-inclusive', assistantMessageUuid: 'assistant-1' }))
       .rejects.toThrow('历史 Claude transcript 为只读')
   })
 
@@ -555,12 +555,80 @@ describe('Pi entry binding recovery', () => {
       JSON.stringify({ type: 'assistant', uuid: 'assistant-stale', message: { content: [{ type: 'text', text: '丢弃' }] } }),
     ])
 
-    const retainedCount = await manager.rewindPiAgentSession('pi-rewind-source', 'assistant-keep')
+    const retainedCount = await manager.rewindPiAgentSession('pi-rewind-source', { kind: 'assistant-inclusive', assistantMessageUuid: 'assistant-keep' })
 
     expect(retainedCount).toBe(2)
     expect(manager.getAgentSessionMeta('pi-rewind-source')?.piEntryBindings).toEqual({ 'assistant-keep': 'entry-keep' })
     expect(manager.getAgentSessionSDKMessages('pi-rewind-source').map((message) => (message as { uuid?: string }).uuid))
       .toEqual(['user-1', 'assistant-keep'])
+  })
+
+  test('Given 撤回中间的用户消息 When rewinding with before-user-message Then 删除该消息及其后并保留之前历史', async () => {
+    const piSessionFile = join(tempHome, '.pi-source-withdraw.jsonl')
+    writeFileSync(piSessionFile, jsonl([
+      JSON.stringify({ type: 'session', version: '3', id: 'pi-withdraw-session' }),
+    ]), 'utf-8')
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-source', title: 'Pi withdraw', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: 'pi-withdraw-session', piSessionFile,
+      piEntryBindings: { 'assistant-keep': 'entry-keep', 'assistant-stale': 'entry-stale' },
+    }])
+    writeAgentSessionJsonl('pi-withdraw-source', [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-keep', message: { content: [{ type: 'text', text: '保留' }] } }),
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-stale', message: { content: [{ type: 'text', text: '丢弃' }] } }),
+    ])
+
+    const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-source', { kind: 'before-user-message', userMessageUuid: 'user-target' })
+
+    expect(retainedCount).toBe(2)
+    expect(manager.getAgentSessionMeta('pi-withdraw-source')?.piEntryBindings).toEqual({ 'assistant-keep': 'entry-keep' })
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-source').map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['user-1', 'assistant-keep'])
+  })
+
+  test('Given 撤回首条用户消息 When rewinding with before-user-message Then branch 到 session header 重置为空会话', async () => {
+    const piSessionFile = join(tempHome, '.pi-source-withdraw-first.jsonl')
+    writeFileSync(piSessionFile, jsonl([
+      JSON.stringify({ type: 'session', version: '3', id: 'pi-withdraw-first-session' }),
+    ]), 'utf-8')
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-first', title: 'Pi withdraw first', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: 'pi-withdraw-first-session', piSessionFile,
+      piEntryBindings: { 'assistant-stale': 'entry-stale' },
+    }])
+    writeAgentSessionJsonl('pi-withdraw-first', [
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-stale', message: { content: [{ type: 'text', text: '丢弃' }] } }),
+    ])
+
+    const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-first', { kind: 'before-user-message', userMessageUuid: 'user-target' })
+
+    expect(retainedCount).toBe(0)
+    expect(manager.getAgentSessionMeta('pi-withdraw-first')?.piEntryBindings).toEqual({})
+    expect(manager.getAgentSessionMeta('pi-withdraw-first')?.piSessionFile && existsSync(manager.getAgentSessionMeta('pi-withdraw-first')?.piSessionFile ?? '')).toBe(true)
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-first')).toEqual([])
+  })
+
+  test('Given 撤回目标用户消息不存在 When rewinding with before-user-message Then 报错且不改动任何文件', async () => {
+    const piSessionFile = join(tempHome, '.pi-source-withdraw-missing.jsonl')
+    writeFileSync(piSessionFile, jsonl([
+      JSON.stringify({ type: 'session', version: '3', id: 'pi-withdraw-missing-session' }),
+    ]), 'utf-8')
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-missing', title: 'Pi withdraw missing', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: 'pi-withdraw-missing-session', piSessionFile,
+      piEntryBindings: {},
+    }])
+    const originalJsonl = jsonl([
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] } }),
+    ])
+    writeAgentSessionJsonl('pi-withdraw-missing', [originalJsonl.trim()])
+
+    await expect(manager.rewindPiAgentSession('pi-withdraw-missing', { kind: 'before-user-message', userMessageUuid: 'user-not-exist' }))
+      .rejects.toThrow('未找到用户消息')
+    expect(readFileSync(join(tempHome, '.proma', 'agent-sessions', 'pi-withdraw-missing.jsonl'), 'utf-8')).toBe(originalJsonl)
   })
 })
 

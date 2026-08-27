@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo, Trash2 } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
@@ -924,9 +924,11 @@ function ScheduledRunBadge(): React.ReactElement {
   )
 }
 
-function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
+function UserInputMessage({ message, onAgentHistoryQuoteClick, onDeleteFromMessage }: {
   message: SDKUserMessage
   onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
+  /** 撤回此消息（删除该消息及其后所有内容） */
+  onDeleteFromMessage?: () => void
 }): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
@@ -1060,9 +1062,17 @@ function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
           onIndexChange={setLightboxIndex}
         />
       )}
-      {text && (
+      {(text || onDeleteFromMessage) && (
         <MessageActions className="pl-[46px] mt-0.5">
-          <CopyButton content={replaceAgentHistoryQuoteMentionsWithLabels(text)} />
+          {text && <CopyButton content={replaceAgentHistoryQuoteMentionsWithLabels(text)} />}
+          {onDeleteFromMessage && (
+            <MessageAction
+              tooltip="撤回此消息（其后的对话与回复将一并删除）"
+              onClick={onDeleteFromMessage}
+            >
+              <Trash2 className="size-3.5" />
+            </MessageAction>
+          )}
         </MessageActions>
       )}
     </Message>
@@ -1383,6 +1393,8 @@ export interface MessageGroupRendererProps {
   basePath?: string
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
+  /** 撤回误发送的用户消息（删除该消息及其后所有内容），传入该消息 uuid */
+  onDeleteFromMessage?: (userMessageUuid: string) => void
   /** 已发送的 Agent 历史引用 chip 请求定位时的精确范围。 */
   onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
   /** 将 assistant 回复标记为 Todo */
@@ -1451,13 +1463,18 @@ export function getGroupId(group: MessageGroup): string {
 
 // getGroupPreview 已迁移至 @proma/session-core（本文件从该包 import 并 re-export）
 
-export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onAgentHistoryQuoteClick, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, historyTurn, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onDeleteFromMessage, onAgentHistoryQuoteClick, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, historyTurn, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
+    const userMessageUuid = group.message.uuid
     return (
       <div data-message-id={groupId} data-message-role="user" data-message-turn={historyTurn}>
-        <UserInputMessage message={group.message} onAgentHistoryQuoteClick={onAgentHistoryQuoteClick} />
+        <UserInputMessage
+          message={group.message}
+          onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}
+          onDeleteFromMessage={onDeleteFromMessage && userMessageUuid ? () => onDeleteFromMessage(userMessageUuid) : undefined}
+        />
       </div>
     )
   }
@@ -1506,6 +1523,7 @@ export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ g
   && previous.basePath === next.basePath
   && previous.onFork === next.onFork
   && previous.onRewind === next.onRewind
+  && previous.onDeleteFromMessage === next.onDeleteFromMessage
   && previous.onAgentHistoryQuoteClick === next.onAgentHistoryQuoteClick
   && previous.onCreateTodo === next.onCreateTodo
   && previous.onRetry === next.onRetry

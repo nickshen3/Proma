@@ -478,13 +478,14 @@ setHeadlessAgentRunner(runAgentHeadless)
 setAgentStopper(stopAgent)
 
 /**
- * 快照回退：回退到指定消息点，恢复文件 + 截断对话
+ * 快照回退：回退到指定消息点，恢复文件 + 截断对话；
+ * 也可用 beforeUserMessageUuid 撤回误发送的用户消息（删除该消息及其后）。
  */
 export async function rewindAgentSession(
   sessionId: string,
-  assistantMessageUuid: string,
+  input: import('@proma/shared').RewindSessionInput,
 ): Promise<import('@proma/shared').RewindSessionResult> {
-  return orchestrator.rewindSession(sessionId, assistantMessageUuid)
+  return orchestrator.rewindSession(sessionId, input)
 }
 
 /**

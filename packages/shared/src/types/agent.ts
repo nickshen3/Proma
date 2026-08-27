@@ -1297,7 +1297,13 @@ export interface RewindSessionInput {
   /** Proma 会话 ID */
   sessionId: string
   /** 回退到哪条 assistant message（inclusive，截断该消息之后的一切） */
-  assistantMessageUuid: string
+  assistantMessageUuid?: string
+  /**
+   * 撤回模式：删除从这条 user message 开始的一切（该消息本身也删除）。
+   * 与 assistantMessageUuid 二选一，用于撤回误发送的用户消息；
+   * 若该消息是会话首条，会话将被重置为空。
+   */
+  beforeUserMessageUuid?: string
 }
 
 /** 快照回退结果 */

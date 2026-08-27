@@ -439,6 +439,11 @@ interface AgentViewProps {
   embedded?: boolean
 }
 
+/** 回退/撤回目标：assistant 锚点保留到该回复（inclusive），user 锚点删除该消息及其后 */
+type RewindTarget =
+  | { kind: 'assistant-inclusive'; assistantMessageUuid: string }
+  | { kind: 'before-user-message'; userMessageUuid: string }
+
 export function AgentView({ sessionId, embedded = false }: AgentViewProps): React.ReactElement {
   const store = useStore()
   const stopShortcutTarget = React.useMemo(() => ({ kind: 'agent' as const, sessionId }), [sessionId])
@@ -2556,23 +2561,31 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     }
   }, [sessionId, setAgentSessions, setSidePanelOpen, setSidePanelTabMap, setSideTemporaryAgentMap])
 
-  /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
-  const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
+  /** 快照回退 / 撤回用户消息：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
+  const [rewindTarget, setRewindTarget] = React.useState<RewindTarget | null>(null)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    setRewindTargetUuid(assistantMessageUuid)
+    setRewindTarget({ kind: 'assistant-inclusive', assistantMessageUuid })
+  }, [])
+
+  /** 撤回误发送的用户消息（停止生成后也适用）：删除该消息及其后所有内容 */
+  const handleDeleteFromMessage = React.useCallback((userMessageUuid: string): void => {
+    setRewindTarget({ kind: 'before-user-message', userMessageUuid })
   }, [])
 
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
-    if (!rewindTargetUuid) return
-    const targetUuid = rewindTargetUuid
-    setRewindTargetUuid(null)
+    if (!rewindTarget) return
+    const target = rewindTarget
+    setRewindTarget(null)
+
+    const isDeleteFromMessage = target.kind === 'before-user-message'
 
     try {
-      const result = await window.electronAPI.rewindSession({
-        sessionId,
-        assistantMessageUuid: targetUuid,
-      })
+      const result = await window.electronAPI.rewindSession(
+        isDeleteFromMessage
+          ? { sessionId, beforeUserMessageUuid: target.userMessageUuid }
+          : { sessionId, assistantMessageUuid: target.assistantMessageUuid },
+      )
 
       // 刷新消息列表
       store.set(agentMessageRefreshAtom, (prev) => {
@@ -2586,25 +2599,26 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
       })
 
+      const successTitle = isDeleteFromMessage ? '已撤回消息' : '已回退到此处'
       if (result.fileRewind?.canRewind) {
         const fileCount = result.fileRewind.filesChanged?.length ?? 0
-        toast.success('已回退到此处', {
+        toast.success(successTitle, {
           description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
         })
       } else if (result.fileRewind?.error) {
-        toast.warning('已回退对话', {
+        toast.warning(isDeleteFromMessage ? '已撤回消息' : '已回退对话', {
           description: `文件恢复不可用：${result.fileRewind.error}`,
         })
       } else {
-        toast.success('已回退到此处')
+        toast.success(successTitle)
       }
     } catch (error) {
       console.error('[AgentView] 回退失败:', error)
-      toast.error('回退失败', {
+      toast.error(isDeleteFromMessage ? '撤回失败' : '回退失败', {
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store])
+  }, [rewindTarget, sessionId, store])
 
   // 仅处理全局快捷键明确指向本会话的停止事件；父/子会话可同时挂载。
   React.useEffect(() => {
@@ -2992,6 +3006,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           onRestoreProjectRoot={handleOpenRestoreProjectRootDialog}
           onFork={embedded || isLegacyTranscript ? undefined : handleFork}
           onRewind={isLegacyTranscript ? undefined : handleRewindRequest}
+          onDeleteFromMessage={isLegacyTranscript ? undefined : handleDeleteFromMessage}
           onCreateTodo={handleOpenReplyTodoDialog}
           onCompact={handleCompact}
           onAddHistoryQuote={handleAddHistoryQuote}
@@ -3165,16 +3180,18 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       </DialogContent>
     </Dialog>
 
-    {/* 回退确认弹窗 */}
+    {/* 回退 / 撤回确认弹窗 */}
     <AlertDialog
-      open={rewindTargetUuid !== null}
-      onOpenChange={(v) => { if (!v) setRewindTargetUuid(null) }}
+      open={rewindTarget !== null}
+      onOpenChange={(v) => { if (!v) setRewindTarget(null) }}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>确认回退</AlertDialogTitle>
+          <AlertDialogTitle>{rewindTarget?.kind === 'before-user-message' ? '确认撤回消息' : '确认回退'}</AlertDialogTitle>
           <AlertDialogDescription>
-            回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？
+            {rewindTarget?.kind === 'before-user-message'
+              ? '将删除这条消息及其后的所有对话与回复。此操作不可撤销，确定要撤回吗？'
+              : '回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -3183,7 +3200,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
             onClick={handleRewindConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            回退
+            {rewindTarget?.kind === 'before-user-message' ? '撤回' : '回退'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

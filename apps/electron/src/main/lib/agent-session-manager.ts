@@ -924,34 +924,99 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   }
 }
 
+/** Pi 会话回退锚点：assistant 锚点保留该消息（inclusive），user 锚点删除该消息及其后（exclusive） */
+export type PiRewindAnchor =
+  | { kind: 'assistant-inclusive'; assistantMessageUuid: string }
+  | { kind: 'before-user-message'; userMessageUuid: string }
+
+/** 读取 Pi session artifact 的 header entry id（type=session 的首行），用作“重置为空会话”的 branch 锚点 */
+function readPiSessionHeaderId(piSessionFile: string): string {
+  const raw = readFileSync(piSessionFile, 'utf-8')
+  const firstLine = raw.split('\n').find((line) => line.trim())
+  if (!firstLine) throw new Error('Pi session artifact 为空，无法锚定空会话分支')
+  const header = JSON.parse(firstLine) as { type?: unknown; id?: unknown }
+  if (header.type !== 'session' || typeof header.id !== 'string') {
+    throw new Error('Pi session artifact 缺少 session header，无法锚定空会话分支')
+  }
+  return header.id
+}
+
+/** 在 Pi session artifact 中按消息 uuid 反查 entry id；仅用于 piEntryBindings 尚未覆盖的消息类型 */
+function findPiEntryIdByMessageUuid(piSessionFile: string, messageUuid: string): string | undefined {
+  const raw = readFileSync(piSessionFile, 'utf-8')
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue
+    let entry: unknown
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const candidate = entry as { type?: unknown; id?: unknown; message?: { uuid?: unknown } }
+    if (candidate.type !== 'message' || typeof candidate.id !== 'string') continue
+    if (typeof candidate.message?.uuid === 'string' && candidate.message.uuid === messageUuid) return candidate.id
+  }
+  return undefined
+}
+
 /**
- * 将当前 Pi 会话切换到指定 assistant turn 的新 branch artifact（持久化回退）。
+ * 将当前 Pi 会话切换到指定锚点的新 branch artifact（持久化回退/撤回）。
  *
  * Proma JSONL 和 Pi branch artifact 是两个事实源：先完整校验 JSONL，再创建 branch；
  * JSONL 写入成功后才提交 metadata。metadata 写入失败时会恢复原 JSONL，避免两边分叉。
+ *
+ * 撤回用户消息（before-user-message）时保留集为该消息之前的内容：
+ * branch 锚点取保留集中最后一条有 uuid 的消息（assistant 优先用运行时落盘的
+ * piEntryBindings，其余消息类型从 Pi artifact 按 uuid 反查）；保留集为空时
+ * branch 到 session header，等价于把会话重置为空。
  */
-export async function rewindPiAgentSession(sessionId: string, assistantMessageUuid: string): Promise<number> {
+export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAnchor): Promise<number> {
   const meta = getAgentSessionMeta(sessionId)
   if (!meta) throw new Error('Agent 会话不存在')
   if (meta.legacyTranscript) throw new Error('历史 Claude transcript 为只读，不能回退；请新建 Pi 会话继续')
-  const entryId = meta.piEntryBindings?.[assistantMessageUuid]
-  if (!entryId) throw new Error('该 Pi 历史消息尚无 entry ID 映射，无法安全回退')
   if (!meta.piSessionFile || !existsSync(meta.piSessionFile)) throw new Error('未找到 Pi session artifact，无法安全回退')
 
   const filePath = getAgentSessionMessagesPath(sessionId)
   if (!existsSync(filePath)) throw new Error(`[Agent 会话] 截断失败: 会话消息文件不存在, sessionId=${sessionId}`)
   const originalContent = readFileSync(filePath, 'utf-8')
   const originalMessages = parseJsonlStrict<unknown>(originalContent.split('\n').filter((line) => line.trim()), `截断读取 SDKMessage (${sessionId})`).map(normalizePersistedSDKMessage)
-  const cutIndex = originalMessages.findIndex((message) => 'uuid' in message && (message as { uuid?: string }).uuid === assistantMessageUuid)
-  if (cutIndex < 0) throw new Error(`[Agent 会话] 截断失败: 未找到 uuid=${assistantMessageUuid}, sessionId=${sessionId}`)
-  const kept = originalMessages.slice(0, cutIndex + 1)
+
+  const messageUuid = (message: unknown): string | undefined => {
+    const candidate = message as { uuid?: unknown }
+    return typeof candidate.uuid === 'string' ? candidate.uuid : undefined
+  }
+
+  let kept: unknown[]
+  if (anchor.kind === 'assistant-inclusive') {
+    const cutIndex = originalMessages.findIndex((message) => messageUuid(message) === anchor.assistantMessageUuid)
+    if (cutIndex < 0) throw new Error(`[Agent 会话] 截断失败: 未找到 uuid=${anchor.assistantMessageUuid}, sessionId=${sessionId}`)
+    kept = originalMessages.slice(0, cutIndex + 1)
+  } else {
+    const cutIndex = originalMessages.findIndex((message) => messageUuid(message) === anchor.userMessageUuid)
+    if (cutIndex < 0) throw new Error(`[Agent 会话] 截断失败: 未找到用户消息 uuid=${anchor.userMessageUuid}, sessionId=${sessionId}`)
+    kept = originalMessages.slice(0, cutIndex)
+  }
   const truncatedContent = kept.map((message) => JSON.stringify(message)).join('\n') + (kept.length > 0 ? '\n' : '')
+
+  // Pi branch 锚点必须精确等于保留集末尾：超前的锚点会连带删掉需要保留的消息。
+  const lastKeptUuid = [...kept].reverse().find((message) => messageUuid(message) !== undefined)
+  let branchAnchorEntryId: string | undefined
+  if (!lastKeptUuid) {
+    branchAnchorEntryId = readPiSessionHeaderId(meta.piSessionFile)
+  } else {
+    const lastKeptMessageUuid = messageUuid(lastKeptUuid)!
+    branchAnchorEntryId = meta.piEntryBindings?.[lastKeptMessageUuid]
+      ?? findPiEntryIdByMessageUuid(meta.piSessionFile, lastKeptMessageUuid)
+  }
+  if (!branchAnchorEntryId) {
+    throw new Error('该消息之前的历史尚无 Pi entry 映射，无法安全撤回')
+  }
 
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
   const cwd = resolveAgentCwd(workspace, meta.id, meta.agentCwdMode, meta.activeWorktree) ?? process.cwd()
   const sdk = await import('@earendil-works/pi-coding-agent')
   const manager = sdk.SessionManager.open(meta.piSessionFile, join(getSdkConfigDir(), 'sessions'), cwd)
-  const branchFile = manager.createBranchedSession(entryId)
+  const branchFile = manager.createBranchedSession(branchAnchorEntryId)
   if (!branchFile || !existsSync(branchFile)) throw new Error('Pi 未能生成回退 session artifact')
   const rewindManager = sdk.SessionManager.open(branchFile, join(getSdkConfigDir(), 'sessions'), cwd)
   const retainedAssistantUuids = new Set(
@@ -961,8 +1026,8 @@ export async function rewindPiAgentSession(sessionId: string, assistantMessageUu
     }),
   )
   const retainedBindings = Object.fromEntries(
-    Object.entries(meta.piEntryBindings ?? {}).filter(([messageUuid, mappedEntryId]) =>
-      retainedAssistantUuids.has(messageUuid) && Boolean(rewindManager.getEntry(mappedEntryId))),
+    Object.entries(meta.piEntryBindings ?? {}).filter(([boundUuid, mappedEntryId]) =>
+      retainedAssistantUuids.has(boundUuid) && Boolean(rewindManager.getEntry(mappedEntryId))),
   )
 
   writeTextFileAtomic(filePath, truncatedContent)

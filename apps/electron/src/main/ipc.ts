@@ -2425,10 +2425,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REWIND_SESSION,
     async (_, input: RewindSessionInput): Promise<RewindSessionResult> => {
-      return rewindAgentSession(
-        input.sessionId,
-        input.assistantMessageUuid,
-      )
+      return rewindAgentSession(input.sessionId, input)
     }
   )
 

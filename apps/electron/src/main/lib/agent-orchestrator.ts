@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionInput, RewindSessionResult, SkillActivation } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -50,7 +50,7 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, type PiRewindAnchor, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
 import { getAgentWorkspace, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
@@ -2225,10 +2225,12 @@ export class AgentOrchestrator {
    *
    * Pi 可安全回退其对话树；文件快照不属于 Pi runtime，因此明确告知用户
    * 当前不会修改工作区文件。退役 Claude 会话仅可查看，不允许回退或继续。
+   *
+   * 两种锚点二选一：assistant 回退（inclusive）或撤回用户消息（删除该消息及其后）。
    */
   async rewindSession(
     sessionId: string,
-    assistantMessageUuid: string,
+    input: RewindSessionInput,
   ): Promise<RewindSessionResult> {
     if (this.activeSessions.has(sessionId)) {
       throw new Error('会话正在运行中，请停止后再回退')
@@ -2241,9 +2243,19 @@ export class AgentOrchestrator {
     if (!sessionMeta?.sdkSessionId) {
       throw new Error('会话没有 Pi session ID，无法回退')
     }
+    if (input.assistantMessageUuid && input.beforeUserMessageUuid) {
+      throw new Error('回退参数冲突：assistantMessageUuid 与 beforeUserMessageUuid 只能二选一')
+    }
+
+    const anchor: PiRewindAnchor = input.beforeUserMessageUuid
+      ? { kind: 'before-user-message', userMessageUuid: input.beforeUserMessageUuid }
+      : { kind: 'assistant-inclusive', assistantMessageUuid: input.assistantMessageUuid ?? '' }
+    if (anchor.kind === 'assistant-inclusive' && !anchor.assistantMessageUuid) {
+      throw new Error('缺少回退锚点消息')
+    }
 
     // rewindPiAgentSession 以单一一致性流程处理 Pi branch、JSONL 截断和 metadata 提交。
-    const remainingMessages = await rewindPiAgentSession(sessionId, assistantMessageUuid)
+    const remainingMessages = await rewindPiAgentSession(sessionId, anchor)
     return {
       remainingMessages,
       fileRewind: {
