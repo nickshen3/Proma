@@ -929,18 +929,6 @@ export type PiRewindAnchor =
   | { kind: 'assistant-inclusive'; assistantMessageUuid: string }
   | { kind: 'before-user-message'; userMessageUuid: string }
 
-/** 读取 Pi session artifact 的 header entry id（type=session 的首行），用作“重置为空会话”的 branch 锚点 */
-function readPiSessionHeaderId(piSessionFile: string): string {
-  const raw = readFileSync(piSessionFile, 'utf-8')
-  const firstLine = raw.split('\n').find((line) => line.trim())
-  if (!firstLine) throw new Error('Pi session artifact 为空，无法锚定空会话分支')
-  const header = JSON.parse(firstLine) as { type?: unknown; id?: unknown }
-  if (header.type !== 'session' || typeof header.id !== 'string') {
-    throw new Error('Pi session artifact 缺少 session header，无法锚定空会话分支')
-  }
-  return header.id
-}
-
 /** 在 Pi session artifact 中按消息 uuid 反查 entry id；仅用于 piEntryBindings 尚未覆盖的消息类型 */
 function findPiEntryIdByMessageUuid(piSessionFile: string, messageUuid: string): string | undefined {
   const raw = readFileSync(piSessionFile, 'utf-8')
@@ -967,8 +955,10 @@ function findPiEntryIdByMessageUuid(piSessionFile: string, messageUuid: string):
  *
  * 撤回用户消息（before-user-message）时保留集为该消息之前的内容：
  * branch 锚点取保留集中最后一条有 uuid 的消息（assistant 优先用运行时落盘的
- * piEntryBindings，其余消息类型从 Pi artifact 按 uuid 反查）；保留集为空时
- * branch 到 session header，等价于把会话重置为空。
+ * piEntryBindings，其余消息类型从 Pi artifact 按 uuid 反查）；保留集为空
+ * （撤回会话首条消息）时不存在可锚定的树 entry，直接清空 Pi metadata，
+ * 让下次发送走 SessionManager.create 全新会话（与 moveSessionToWorkspace
+ * 清空 artifact 的语义一致）。
  */
 export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAnchor): Promise<number> {
   const meta = getAgentSessionMeta(sessionId)
@@ -999,44 +989,53 @@ export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAn
   const truncatedContent = kept.map((message) => JSON.stringify(message)).join('\n') + (kept.length > 0 ? '\n' : '')
 
   // Pi branch 锚点必须精确等于保留集末尾：超前的锚点会连带删掉需要保留的消息。
+  // 注意 session header 不是树 entry（root 是首个 parentId=null 的 entry），不能作为锚点。
   const lastKeptUuid = [...kept].reverse().find((message) => messageUuid(message) !== undefined)
   let branchAnchorEntryId: string | undefined
-  if (!lastKeptUuid) {
-    branchAnchorEntryId = readPiSessionHeaderId(meta.piSessionFile)
-  } else {
+  if (lastKeptUuid) {
     const lastKeptMessageUuid = messageUuid(lastKeptUuid)!
     branchAnchorEntryId = meta.piEntryBindings?.[lastKeptMessageUuid]
       ?? findPiEntryIdByMessageUuid(meta.piSessionFile, lastKeptMessageUuid)
   }
-  if (!branchAnchorEntryId) {
+  if (lastKeptUuid && !branchAnchorEntryId) {
     throw new Error('该消息之前的历史尚无 Pi entry 映射，无法安全撤回')
   }
 
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
   const cwd = resolveAgentCwd(workspace, meta.id, meta.agentCwdMode, meta.activeWorktree) ?? process.cwd()
-  const sdk = await import('@earendil-works/pi-coding-agent')
-  const manager = sdk.SessionManager.open(meta.piSessionFile, join(getSdkConfigDir(), 'sessions'), cwd)
-  const branchFile = manager.createBranchedSession(branchAnchorEntryId)
-  if (!branchFile || !existsSync(branchFile)) throw new Error('Pi 未能生成回退 session artifact')
-  const rewindManager = sdk.SessionManager.open(branchFile, join(getSdkConfigDir(), 'sessions'), cwd)
-  const retainedAssistantUuids = new Set(
-    kept.flatMap((message) => {
-      const candidate = message as { uuid?: unknown; type?: unknown }
-      return candidate.type === 'assistant' && typeof candidate.uuid === 'string' ? [candidate.uuid] : []
-    }),
-  )
-  const retainedBindings = Object.fromEntries(
-    Object.entries(meta.piEntryBindings ?? {}).filter(([boundUuid, mappedEntryId]) =>
-      retainedAssistantUuids.has(boundUuid) && Boolean(rewindManager.getEntry(mappedEntryId))),
-  )
 
   writeTextFileAtomic(filePath, truncatedContent)
   try {
-    updateAgentSessionMeta(sessionId, {
-      sdkSessionId: rewindManager.getSessionId(),
-      piSessionFile: branchFile,
-      piEntryBindings: retainedBindings,
-    })
+    if (lastKeptUuid && branchAnchorEntryId) {
+      const sdk = await import('@earendil-works/pi-coding-agent')
+      const manager = sdk.SessionManager.open(meta.piSessionFile, join(getSdkConfigDir(), 'sessions'), cwd)
+      const branchFile = manager.createBranchedSession(branchAnchorEntryId)
+      if (!branchFile || !existsSync(branchFile)) throw new Error('Pi 未能生成回退 session artifact')
+      const rewindManager = sdk.SessionManager.open(branchFile, join(getSdkConfigDir(), 'sessions'), cwd)
+      const retainedAssistantUuids = new Set(
+        kept.flatMap((message) => {
+          const candidate = message as { uuid?: unknown; type?: unknown }
+          return candidate.type === 'assistant' && typeof candidate.uuid === 'string' ? [candidate.uuid] : []
+        }),
+      )
+      const retainedBindings = Object.fromEntries(
+        Object.entries(meta.piEntryBindings ?? {}).filter(([boundUuid, mappedEntryId]) =>
+          retainedAssistantUuids.has(boundUuid) && Boolean(rewindManager.getEntry(mappedEntryId))),
+      )
+      updateAgentSessionMeta(sessionId, {
+        sdkSessionId: rewindManager.getSessionId(),
+        piSessionFile: branchFile,
+        piEntryBindings: retainedBindings,
+      })
+    } else {
+      // 保留集为空（撤回会话首条消息）：Pi 懒落盘策略下尚无可锚定的 entry，
+      // 清空 Pi metadata 让下次发送全新创建。
+      updateAgentSessionMeta(sessionId, {
+        sdkSessionId: undefined,
+        piSessionFile: undefined,
+        piEntryBindings: {},
+      })
+    }
   } catch (error) {
     try { writeTextFileAtomic(filePath, originalContent) } catch { /* 保留原始 metadata 错误 */ }
     throw error

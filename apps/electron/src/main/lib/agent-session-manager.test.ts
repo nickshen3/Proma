@@ -588,7 +588,7 @@ describe('Pi entry binding recovery', () => {
       .toEqual(['user-1', 'assistant-keep'])
   })
 
-  test('Given 撤回首条用户消息 When rewinding with before-user-message Then branch 到 session header 重置为空会话', async () => {
+  test('Given 撤回首条用户消息 When rewinding with before-user-message Then 清空 Pi metadata 重置为空会话', async () => {
     const piSessionFile = join(tempHome, '.pi-source-withdraw-first.jsonl')
     writeFileSync(piSessionFile, jsonl([
       JSON.stringify({ type: 'session', version: '3', id: 'pi-withdraw-first-session' }),
@@ -606,9 +606,37 @@ describe('Pi entry binding recovery', () => {
     const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-first', { kind: 'before-user-message', userMessageUuid: 'user-target' })
 
     expect(retainedCount).toBe(0)
-    expect(manager.getAgentSessionMeta('pi-withdraw-first')?.piEntryBindings).toEqual({})
-    expect(manager.getAgentSessionMeta('pi-withdraw-first')?.piSessionFile && existsSync(manager.getAgentSessionMeta('pi-withdraw-first')?.piSessionFile ?? '')).toBe(true)
+    const metaAfter = manager.getAgentSessionMeta('pi-withdraw-first')
+    expect(metaAfter?.sdkSessionId).toBeUndefined()
+    expect(metaAfter?.piSessionFile).toBeUndefined()
+    expect(metaAfter?.piEntryBindings).toEqual({})
     expect(manager.getAgentSessionSDKMessages('pi-withdraw-first')).toEqual([])
+  })
+
+  test('Given 保留集末尾是队列中的用户消息 When rewinding with before-user-message Then 从 Pi artifact 反查该消息 entry 锚点', async () => {
+    const piSessionFile = join(tempHome, '.pi-source-withdraw-queued.jsonl')
+    writeFileSync(piSessionFile, jsonl([
+      JSON.stringify({ type: 'session', version: '3', id: 'pi-withdraw-queued-session' }),
+      JSON.stringify({ type: 'message', id: 'entry-a1', parentId: null, message: { role: 'assistant', uuid: 'assistant-keep' } }),
+      JSON.stringify({ type: 'message', id: 'entry-u1', parentId: 'entry-a1', message: { role: 'user', uuid: 'user-queued' } }),
+    ]), 'utf-8')
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-queued', title: 'Pi withdraw queued', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: 'pi-withdraw-queued-session', piSessionFile,
+      piEntryBindings: { 'assistant-keep': 'entry-keep' },
+    }])
+    writeAgentSessionJsonl('pi-withdraw-queued', [
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-keep', message: { content: [{ type: 'text', text: '保留' }] } }),
+      JSON.stringify({ type: 'user', uuid: 'user-queued', message: { content: [{ type: 'text', text: '队列中的消息' }] } }),
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] } }),
+    ])
+
+    const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-queued', { kind: 'before-user-message', userMessageUuid: 'user-target' })
+
+    expect(retainedCount).toBe(2)
+    expect(manager.getAgentSessionMeta('pi-withdraw-queued')?.piEntryBindings).toEqual({ 'assistant-keep': 'entry-keep' })
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-queued').map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['assistant-keep', 'user-queued'])
   })
 
   test('Given 撤回目标用户消息不存在 When rewinding with before-user-message Then 报错且不改动任何文件', async () => {
