@@ -24,6 +24,8 @@ import { AgentMessageQueue } from './AgentMessageQueue'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
+import { RoleSelector } from './RoleSelector'
+import { sessionAgentRoleSelectionFamily, sessionAgentRoleLockFamily } from '@/atoms/agent-role-atoms'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
@@ -2246,6 +2248,9 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     } as unknown as SDKMessage
     appendOptimisticPersistedMessage(tempUserSDKMsg)
 
+    // 角色选择：本条消息由选中的角色执行；未锁定时发送后自动回退主助手
+    const runAgentRoleId = store.get(sessionAgentRoleSelectionFamily(sessionId))
+
     const input: AgentSendInput = {
       sessionId,
       userMessage: sdkMessage,
@@ -2255,6 +2260,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
+      ...(runAgentRoleId && { agentRoleId: runAgentRoleId }),
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       ...(mentions.mentionedSkills.length > 0 && { mentionedSkills: mentions.mentionedSkills }),
       ...(mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: mentions.mentionedMcpServers }),
@@ -2268,6 +2274,11 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     if (overrideText === undefined || fromEditor) {
       setInputContent('')
       setInputHtmlContent('')
+    }
+
+    // 未锁定时，角色选择仅对本条消息生效：发送后回退主助手
+    if (runAgentRoleId && !store.get(sessionAgentRoleLockFamily(sessionId))) {
+      store.set(sessionAgentRoleSelectionFamily(sessionId), undefined)
     }
 
     window.electronAPI.sendAgentMessage(input).catch((error) => {
@@ -2467,6 +2478,16 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       return map
     })
 
+    // 重试沿用失败那轮的角色：从最近带角色快照的 assistant 消息读取，保持角色不斘档
+    let retryAgentRoleId: string | undefined
+    for (let i = persistedSDKMessages.length - 1; i >= 0; i--) {
+      const msg = persistedSDKMessages[i] as { agentRoleId?: string }
+      if (msg.agentRoleId) {
+        retryAgentRoleId = msg.agentRoleId
+        break
+      }
+    }
+
     window.electronAPI.sendAgentMessage({
       sessionId,
       // Agent 侧使用解码后的文本（@file 真实路径）；持久化/展示保留编码原文，避免新历史记录被 \S+ 截断
@@ -2477,6 +2498,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
+      ...(retryAgentRoleId && { agentRoleId: retryAgentRoleId }),
       ...(retryOfErrorUuid && { retryOfErrorUuid }),
     }).catch(console.error)
   }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, agentChannelProvider, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, permissionMode])
@@ -2828,6 +2850,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         </Tooltip>
       ),
     }] : []),
+    { key: 'agent-role', node: <RoleSelector sessionId={sessionId} /> },
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
     {
       key: 'thinking',

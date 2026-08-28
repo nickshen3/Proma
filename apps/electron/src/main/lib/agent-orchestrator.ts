@@ -51,6 +51,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, type PiRewindAnchor, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
+import { resolveExecutableAgentRole, buildAgentRolePromptSection } from './agent-role-manager'
 import { getAgentWorkspace, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
@@ -639,6 +640,7 @@ export class AgentOrchestrator {
     sessionId: string,
     resultSubtype: string | undefined,
     resultErrors: string[] | undefined,
+    agentRole?: { id: string; name: string },
   ): string {
     const detail = resultErrors?.find((error) => error.trim().length > 0)?.trim()
     const subtype = resultSubtype ?? 'unknown'
@@ -658,6 +660,7 @@ export class AgentOrchestrator {
       _createdAt: Date.now(),
       _errorCode: 'unknown_error',
       _errorTitle: '没有收到模型回复',
+      ...(agentRole ? { agentRoleId: agentRole.id, agentRoleName: agentRole.name } : {}),
       _errorCanRetry: true,
       _errorActions: [
         { key: 'r', label: '重试', action: 'retry' },
@@ -680,7 +683,7 @@ export class AgentOrchestrator {
     callbacks: SessionCallbacks,
     extensions: { piCustomTools?: ToolDefinition[] } = {},
   ): Promise<void> {
-    const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
+    const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid, agentRoleId } = input
     const streamStartedAt = input.startedAt ?? Date.now()
     let userMessagePersisted = false
     let initialUserMessageUuid: string | undefined
@@ -945,8 +948,16 @@ export class AgentOrchestrator {
       pendingSkillActivations = mergeSkillActivations(pendingSkillActivations, activations)
       this.recordUserSkillActivations(sessionId, userMessageUuid, activations)
     }
+    // Agent 角色解析：角色存在且未禁用时本条消息以该角色执行；
+    // 角色缺失/被禁用时降级为主助手并告警，不中断执行。
+    // 角色不改变权限边界：permissionMode 逻辑完全不变。
+    const agentRole = resolveExecutableAgentRole(agentRoleId)
+    if (agentRoleId && !agentRole) {
+      console.warn(`[Agent 编排] 指定的角色不可用（不存在或已禁用），已降级为主助手执行: ${agentRoleId}`)
+    }
     // 委派子会话必须继承当前实际运行的模型；未显式传入时与 runtime 的默认值保持一致。
-    const selectedModelId = modelId || DEFAULT_MODEL_ID
+    // 角色默认模型仅在用户未显式指定模型时生效（优先级：用户显式选择 > 角色默认 > 会话默认）。
+    const selectedModelId = modelId || agentRole?.modelId || DEFAULT_MODEL_ID
     let resolvedModel = selectedModelId
     let titleGenerationStarted = false
     /** 捕获到的 SDK session ID（用于 resume / recovery） */
@@ -1437,6 +1448,7 @@ export class AgentOrchestrator {
         memoryGuidance,
         memoryRefreshOpportunity,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+        + (agentRole ? buildAgentRolePromptSection(agentRole) : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
         titleGenerationStarted = true
@@ -1771,6 +1783,10 @@ export class AgentOrchestrator {
                   const partialOutput = stripPiAssistantError(assistantMsg)
                   if (modelId) partialOutput._channelModelId = modelId
                   partialOutput._channelProvider = channel.provider
+                  if (agentRole) {
+                    partialOutput.agentRoleId = agentRole.id
+                    partialOutput.agentRoleName = agentRole.name
+                  }
                   const partialRecord = partialOutput as SDKAssistantMessage & { _createdAt?: number }
                   if (typeof partialRecord._createdAt !== 'number') {
                     partialRecord._createdAt = streamStartedAt
@@ -1797,6 +1813,7 @@ export class AgentOrchestrator {
                   uuid: randomUUID(),
                   _channelModelId: modelId,
                   _channelProvider: channel.provider,
+                  ...(agentRole ? { agentRoleId: agentRole.id, agentRoleName: agentRole.name } : {}),
                   error: { message: typedError.message, errorType: typedError.code },
                   _createdAt: Date.now(),
                   _errorCode: typedError.code,
@@ -1848,6 +1865,11 @@ export class AgentOrchestrator {
                       assistantRecord._channelModelId = modelId
                     }
                     assistantRecord._channelProvider = channel.provider
+                    // 角色快照：历史回放时即使角色被删/改名也能展示标识
+                    if (agentRole) {
+                      assistantRecord.agentRoleId = agentRole.id
+                      assistantRecord.agentRoleName = agentRole.name
+                    }
                   }
                   accumulatedMessages.push(msg)
                 }
@@ -1947,7 +1969,7 @@ export class AgentOrchestrator {
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
           if (!wasStoppedByUser && visibleRunMessageCount === 0) {
-            const errorContent = this.persistEmptyResponseError(sessionId, capturedResultSubtype, capturedResultErrors)
+            const errorContent = this.persistEmptyResponseError(sessionId, capturedResultSubtype, capturedResultErrors, agentRole)
             failRun(errorContent, getAgentSessionMessages(sessionId), {
               startedAt: streamStartedAt,
               resultSubtype: EMPTY_RESPONSE_RESULT_SUBTYPE,

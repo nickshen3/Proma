@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, normalizePathForCompare, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_ROLE_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, normalizePathForCompare, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS, TRAY_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -86,6 +86,10 @@ import type {
   SystemPrompt,
   SystemPromptCreateInput,
   SystemPromptUpdateInput,
+  AgentRoleConfig,
+  AgentRole,
+  AgentRoleCreateInput,
+  AgentRoleUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -364,6 +368,13 @@ import {
   updateAppendSetting,
   setDefaultPrompt,
 } from './lib/system-prompt-manager'
+import {
+  getAgentRoleConfig,
+  createAgentRole,
+  updateAgentRole,
+  deleteAgentRole,
+  resetBuiltinAgentRoles,
+} from './lib/agent-role-manager'
 import {
   getLatestRelease,
   listReleases as listGitHubReleases,
@@ -2259,6 +2270,14 @@ export function registerIpcHandlers(): void {
     async (_, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
       // 模型切换允许在运行中提交；当前 query 继续使用启动时的模型，下一轮读取新配置。
       return updateAgentSessionMeta(id, { channelId, modelId })
+    }
+  )
+
+  // 更新会话锁定的 Agent 角色（角色选择器“锁定到会话”）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_ROLE_LOCK,
+    async (_, id: string, lockedAgentRoleId: string | null): Promise<AgentSessionMeta> => {
+      return updateAgentSessionMeta(id, { lockedAgentRoleId: lockedAgentRoleId ?? undefined })
     }
   )
 
@@ -4239,6 +4258,48 @@ export function registerIpcHandlers(): void {
     SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT,
     async (_, id: string | null): Promise<void> => {
       return setDefaultPrompt(id)
+    }
+  )
+
+  // ===== Agent 角色管理 =====
+
+  // 获取角色配置（内置以源码为准合并）
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.GET_CONFIG,
+    async (): Promise<AgentRoleConfig> => {
+      return getAgentRoleConfig()
+    }
+  )
+
+  // 创建自定义角色
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.CREATE,
+    async (_, input: AgentRoleCreateInput): Promise<AgentRole> => {
+      return createAgentRole(input)
+    }
+  )
+
+  // 更新角色（内置角色仅允许 disabled）
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.UPDATE,
+    async (_, input: AgentRoleUpdateInput): Promise<AgentRole> => {
+      return updateAgentRole(input)
+    }
+  )
+
+  // 删除自定义角色
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.DELETE,
+    async (_, roleId: string): Promise<void> => {
+      return deleteAgentRole(roleId)
+    }
+  )
+
+  // 重置内置角色为源码默认状态
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN,
+    async (): Promise<AgentRoleConfig> => {
+      return resetBuiltinAgentRoles()
     }
   )
 

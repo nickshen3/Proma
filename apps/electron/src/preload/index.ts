@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_ROLE_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -82,6 +82,10 @@ import type {
   SystemPrompt,
   SystemPromptCreateInput,
   SystemPromptUpdateInput,
+  AgentRoleConfig,
+  AgentRole,
+  AgentRoleCreateInput,
+  AgentRoleUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -574,6 +578,8 @@ export interface ElectronAPI {
 
   /** 更新 Agent 会话模型选择 */
   updateAgentSessionModel: (id: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
+  /** 更新会话锁定的 Agent 角色（角色选择器“锁定到会话”） */
+  updateSessionAgentRoleLock: (id: string, lockedAgentRoleId: string | null) => Promise<AgentSessionMeta>
 
   /** 选择或清除当前会话的活动 worktree */
   setAgentSessionActiveWorktree: (input: SetAgentSessionActiveWorktreeInput) => Promise<AgentSessionMeta>
@@ -991,6 +997,23 @@ export interface ElectronAPI {
 
   /** 更新追加日期时间和用户名开关 */
   updateAppendSetting: (enabled: boolean) => Promise<void>
+
+  // ===== Agent 角色管理 =====
+
+  /** 获取 Agent 角色配置（内置以源码为准合并） */
+  getAgentRoleConfig: () => Promise<AgentRoleConfig>
+
+  /** 创建自定义角色 */
+  createAgentRole: (input: AgentRoleCreateInput) => Promise<AgentRole>
+
+  /** 更新角色（内置角色仅允许 disabled） */
+  updateAgentRole: (input: AgentRoleUpdateInput) => Promise<AgentRole>
+
+  /** 删除自定义角色 */
+  deleteAgentRole: (roleId: string) => Promise<void>
+
+  /** 重置内置角色为源码默认状态 */
+  resetBuiltinAgentRoles: () => Promise<AgentRoleConfig>
 
   /** 设置默认提示词 */
   setDefaultPrompt: (id: string | null) => Promise<void>
@@ -1830,6 +1853,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL, id, channelId, modelId)
   },
 
+  updateSessionAgentRoleLock: (id: string, lockedAgentRoleId: string | null) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_ROLE_LOCK, id, lockedAgentRoleId)
+  },
+
   setAgentSessionActiveWorktree: (input: SetAgentSessionActiveWorktreeInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_ACTIVE_WORKTREE, input)
   },
@@ -2445,6 +2472,27 @@ const electronAPI: ElectronAPI = {
 
   updateAppendSetting: (enabled: boolean) => {
     return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.UPDATE_APPEND_SETTING, enabled)
+  },
+
+  // Agent 角色管理
+  getAgentRoleConfig: () => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.GET_CONFIG)
+  },
+
+  createAgentRole: (input: AgentRoleCreateInput) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.CREATE, input)
+  },
+
+  updateAgentRole: (input: AgentRoleUpdateInput) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.UPDATE, input)
+  },
+
+  deleteAgentRole: (roleId: string) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.DELETE, roleId)
+  },
+
+  resetBuiltinAgentRoles: () => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN)
   },
 
   setDefaultPrompt: (id: string | null) => {

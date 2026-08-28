@@ -195,6 +195,15 @@ export function getSystemPromptsPath(): string {
 }
 
 /**
+ * 获取 Agent 角色配置文件路径
+ *
+ * @returns ~/.proma/agent-roles.json
+ */
+export function getAgentRolesPath(): string {
+  return join(getConfigDir(), 'agent-roles.json')
+}
+
+/**
  * 获取 Chat 工具配置文件路径
  *
  * @returns ~/.proma/chat-tools.json

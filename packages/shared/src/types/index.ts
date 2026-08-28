@@ -43,6 +43,9 @@ export * from './github'
 // 系统提示词相关类型
 export * from './system-prompt'
 
+// Agent 角色相关类型
+export * from './agent-role'
+
 // Chat 工具（function calling）相关类型
 export * from './chat-tool'
 

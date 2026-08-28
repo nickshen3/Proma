@@ -37,6 +37,7 @@ import {
 export { groupIntoTurns, getGroupPreview, extractUserText } from '@proma/session-core'
 export type { MessageGroup, AssistantTurn } from '@proma/session-core'
 import { DurationBadge } from './AgentMessages'
+import { AgentRoleBadge } from './AgentRoleBadge'
 import {
   Message,
   MessageHeader,
@@ -685,7 +686,13 @@ export function SDKMessageRenderer({
             model={model ? resolveModelDisplayName(model, channels) : undefined}
             time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
             logo={<AssistantLogo model={model} />}
-          />
+          >
+            <AgentRoleBadge
+              agentRoleId={aMsg.agentRoleId}
+              agentRoleName={aMsg.agentRoleName}
+              className="ml-1 mt-0.5"
+            />
+          </MessageHeader>
         )}
         <MessageContent>
           <div className={cn('space-y-2')}>

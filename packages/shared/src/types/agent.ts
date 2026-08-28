@@ -227,6 +227,10 @@ export interface SDKAssistantMessage {
   isReplay?: boolean
   /** 渠道配置的模型 ID，持久化/流式期间注入，用于正确匹配模型显示名 */
   _channelModelId?: string
+  /** 产出该消息的 Agent 角色 ID（Proma 注入；缺省为主助手） */
+  agentRoleId?: string
+  /** 发送时刻的角色名快照（角色被删除/改名后历史回放仍能显示标识） */
+  agentRoleName?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
 }
@@ -798,6 +802,8 @@ export interface AgentSessionMeta {
   rootSessionId?: string
   /** 来源委派任务 ID（由 collaboration 工具生成，用于父子会话关联） */
   sourceDelegationId?: string
+  /** 会话锁定的 Agent 角色 ID：新消息默认沿用该角色，直到用户取消锁定 */
+  lockedAgentRoleId?: string
   /** 委派角色，用于 UI 和后续统计 */
   delegationRole?: AgentDelegationRole
   /** 委派任务当前状态 */
@@ -834,6 +840,10 @@ export interface AgentMessage {
   createdAt: number
   /** 使用的模型 ID（assistant 消息） */
   model?: string
+  /** 产出该消息的 Agent 角色 ID（assistant 消息；缺省为主助手） */
+  agentRoleId?: string
+  /** 发送时刻的角色名快照（角色被删除/改名后历史回放仍能显示标识） */
+  agentRoleName?: string
   /** 工具活动数据（agent 事件列表，用于回放工具调用） */
   events?: AgentEvent[]
   /** 错误代码（status 消息，role='status' 时使用） */
@@ -1194,6 +1204,8 @@ export interface AgentSendInput {
   triggeredBy?: 'user' | 'automation' | 'delegation' | 'external'
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
+  /** 本轮消息使用的 Agent 角色 ID（消息级，不跨消息记忆；角色不改变权限边界） */
+  agentRoleId?: string
 }
 
 // ===== Agent 队列消息 =====
@@ -1675,6 +1687,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_TITLE: 'agent:update-title',
   /** 更新会话模型选择 */
   UPDATE_SESSION_MODEL: 'agent:update-session-model',
+  /** 更新会话锁定的 Agent 角色 ID（角色选择器的“锁定到会话”开关） */
+  UPDATE_SESSION_AGENT_ROLE_LOCK: 'agent:update-session-agent-role-lock',
   /** 选择或清除当前会话的活动 worktree */
   SET_ACTIVE_WORKTREE: 'agent:set-active-worktree',
   /** 主进程通知 Renderer：Agent 主动切换了会话的活动 worktree */
