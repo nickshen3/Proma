@@ -16,6 +16,7 @@ import {
   Info,
   Globe,
   BookOpen,
+  UsersRound,
   Wrench,
   Bot,
   GraduationCap,
@@ -59,6 +60,7 @@ import { ProxySettings } from "./ProxySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AboutSettings } from "./AboutSettings";
 import { PromptSettings } from "./PromptSettings";
+import { AgentRoleSettings } from "./AgentRoleSettings";
 import { ToolSettings } from "./ToolSettings";
 import { BotHubSettings } from "./BotHubSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
@@ -81,6 +83,7 @@ const BASE_TABS: TabItem[] = [
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
   { id: "vision-relay", label: "视觉助手", icon: <Eye size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
+  { id: "agent-roles", label: "Agent 角色", icon: <UsersRound size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
 ];
 
@@ -134,6 +137,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <VisionRelaySettings />;
     case "prompts":
       return <PromptSettings />;
+    case "agent-roles":
+      return <AgentRoleSettings />;
     case "proxy":
       return <ProxySettings />;
     case "tools":

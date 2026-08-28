@@ -22,7 +22,6 @@ import {
   AGENT_ROLE_ICON_MAP,
   AGENT_ROLE_BADGE_CLASS,
 } from './AgentRoleBadge'
-import { AgentRoleManageDialog } from './AgentRoleManageDialog'
 import {
   agentRoleConfigAtom,
   sessionAgentRoleSelectionFamily,
@@ -30,6 +29,7 @@ import {
   sessionAgentRoleHydratedFamily,
 } from '@/atoms/agent-role-atoms'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { inputToolbarButtonClass } from '@/components/ai-elements/input-toolbar-styles'
 import { cn } from '@/lib/utils'
 import type { AgentRole } from '@proma/shared'
@@ -44,8 +44,9 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
   const [locked, setLocked] = useAtom(sessionAgentRoleLockFamily(sessionId))
   const [hydrated, setHydrated] = useAtom(sessionAgentRoleHydratedFamily(sessionId))
   const sessions = useAtomValue(agentSessionsAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
   const [open, setOpen] = React.useState(false)
-  const [manageOpen, setManageOpen] = React.useState(false)
 
   // 打开下拉时刷新配置（管理对话框可能在其他会话/窗口改动过）
   const refreshConfig = React.useCallback((): void => {
@@ -107,8 +108,7 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
   const badgeClass = (selectedRole?.color && AGENT_ROLE_BADGE_CLASS[selectedRole.color]) || AGENT_ROLE_BADGE_CLASS.slate
 
   return (
-    <>
-      <DropdownMenu
+    <DropdownMenu
         open={open}
         onOpenChange={(next) => {
           setOpen(next)
@@ -163,7 +163,8 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
           <DropdownMenuItem
             onClick={() => {
               setOpen(false)
-              setManageOpen(true)
+              setSettingsTab('agent-roles')
+              setSettingsOpen(true)
             }}
             className="gap-2"
           >
@@ -172,12 +173,5 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <AgentRoleManageDialog
-        open={manageOpen}
-        onOpenChange={setManageOpen}
-        onChanged={refreshConfig}
-      />
-    </>
   )
 }
