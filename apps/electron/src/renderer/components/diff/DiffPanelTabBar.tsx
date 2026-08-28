@@ -19,6 +19,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { AgentSidePanelTab, WorkspaceComponentTab } from '@/atoms/agent-atoms'
+import {
+  advanceWheelTabNav,
+  createWheelTabNavState,
+  getNeighborTabId,
+  type WheelTabNavState,
+} from '@/lib/tab-wheel-nav'
 
 export interface WorkspacePanelTab {
   id: AgentSidePanelTab
@@ -90,6 +96,9 @@ export function DiffPanelTabBar({
     }
   }, [activeTab, tabs.length])
 
+  // 悬停标题行滚动滚轮 → 按显示顺序切换相邻标签；状态机负责阈值过滤与惯性冷却。
+  const wheelNavStateRef = React.useRef<WheelTabNavState>(createWheelTabNavState())
+
   const selectTab = React.useCallback((tab: AgentSidePanelTab) => {
     if (tab === 'changes' && currentSessionId) {
       setUnseenMap((previous) => {
@@ -101,6 +110,30 @@ export function DiffPanelTabBar({
     }
     onTabChange(tab)
   }, [currentSessionId, onTabChange, setUnseenMap])
+
+  // 原生监听以支持 preventDefault；Shift+滚轮（横向滚动）与 Ctrl+滚轮（缩放）保留原生行为。
+  React.useEffect(() => {
+    const tabList = tabListRef.current
+    if (!tabList) return
+
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return
+      event.preventDefault()
+      if (tabs.length <= 1) return
+
+      const decision = advanceWheelTabNav(wheelNavStateRef.current, event.deltaY, performance.now())
+      if (decision.offset === 0) return
+      const nextTabId = getNeighborTabId(
+        tabs.map((tab) => tab.id),
+        activeTab,
+        decision.offset,
+      )
+      if (nextTabId) selectTab(nextTabId)
+    }
+
+    tabList.addEventListener('wheel', handleWheel, { passive: false })
+    return () => tabList.removeEventListener('wheel', handleWheel)
+  }, [activeTab, selectTab, tabs])
 
   return (
     <div className="relative flex h-10 shrink-0 items-center border-b border-border/50 bg-content-area">
