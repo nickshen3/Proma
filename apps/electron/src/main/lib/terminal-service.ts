@@ -232,6 +232,11 @@ export async function stopAllTerminals(): Promise<void> {
   await terminalRuntimeClient.stop()
 }
 
+/** 当前活跃终端（PTY）数量；退出确认提醒用。 */
+export function getActiveTerminalCount(): number {
+  return terminals.size
+}
+
 function notifyAgentTerminalOpen(record: AgentTerminalRecord): void {
   const event: AgentTerminalOpenEvent = {
     sessionId: record.sessionId,

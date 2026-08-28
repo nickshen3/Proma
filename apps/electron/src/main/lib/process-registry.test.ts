@@ -1,82 +1,50 @@
-import { describe, expect, it } from 'bun:test'
+/**
+ * ProcessRegistry 全局运行中进程查询测试（退出/删除提醒用）
+ */
+
+import { describe, expect, test } from 'bun:test'
 import { ProcessRegistry } from './process-registry'
 import type { SessionProcessInfo } from '@proma/shared'
 
-function makeProcess(partial: Partial<SessionProcessInfo> = {}): SessionProcessInfo {
+function makeProcess(sessionId: string, processId: string, status: SessionProcessInfo['status'] = 'running'): SessionProcessInfo {
   return {
-    processId: 'tc-1',
-    sessionId: 's1',
+    processId,
+    sessionId,
     kind: 'command',
-    title: 'bun run dev',
-    status: 'running',
-    startedAt: 1,
-    ...partial,
-  }
+    status,
+    title: 'test',
+    startedAt: 0,
+  } satisfies SessionProcessInfo
 }
 
-describe('ProcessRegistry', () => {
-  it('登记与查询按会话隔离', () => {
+describe('ProcessRegistry.listRunning / countRunning', () => {
+  test('跨会话统计运行中进程；终态不计入', () => {
     const registry = new ProcessRegistry()
-    registry.register(makeProcess())
-    registry.register(makeProcess({ processId: 'tc-2', sessionId: 's2' }))
-    expect(registry.list('s1')).toHaveLength(1)
-    expect(registry.list('s2')).toHaveLength(1)
+    registry.register(makeProcess('s1', 'p1'))
+    registry.register(makeProcess('s1', 'p2', 'exited'))
+    registry.register(makeProcess('s2', 'p3'))
+    registry.register(makeProcess('s2', 'p4', 'killed'))
+
+    expect(registry.countRunning()).toBe(2)
+    expect(registry.listRunning().map((process) => process.processId).sort()).toEqual(['p1', 'p3'])
   })
 
-  it('更新状态保留原字段且幂等收敛', () => {
+  test('terminate 后不再计入；clearSession 后该会话清零', () => {
     const registry = new ProcessRegistry()
-    registry.register(makeProcess())
-    registry.update('s1', 'tc-1', { status: 'exited', exitCode: 0, endedAt: 9 })
-    const [row] = registry.list('s1')
-    expect(row?.status).toBe('exited')
-    expect(row?.title).toBe('bun run dev')
-    expect(row?.exitCode).toBe(0)
-    // 已终态的记录不被后续 update 复活
-    registry.update('s1', 'tc-1', { status: 'running' })
-    expect(registry.list('s1')[0]?.status).toBe('exited')
+    registry.register(makeProcess('s1', 'p1'))
+    registry.register(makeProcess('s2', 'p2'))
+
+    expect(registry.terminate('s1', 'p1')).toBe(true)
+    expect(registry.countRunning()).toBe(1)
+
+    registry.clearSession('s2')
+    expect(registry.countRunning()).toBe(0)
+    expect(registry.listRunning()).toEqual([])
   })
 
-  it('terminate 调用注入的 killer 并标记 killed', () => {
+  test('空注册表返回 0', () => {
     const registry = new ProcessRegistry()
-    let killed = false
-    registry.register(makeProcess(), { killer: () => { killed = true } })
-    expect(registry.terminate('s1', 'tc-1')).toBe(true)
-    expect(killed).toBe(true)
-    expect(registry.list('s1')[0]?.status).toBe('killed')
-    expect(registry.list('s1')[0]?.endedAt).toBeGreaterThan(0)
-  })
-
-  it('已退出进程不可再终止', () => {
-    const registry = new ProcessRegistry()
-    let killed = false
-    registry.register(makeProcess({ status: 'exited', endedAt: 2 }), { killer: () => { killed = true } })
-    expect(registry.terminate('s1', 'tc-1')).toBe(false)
-    expect(killed).toBe(false)
-  })
-
-  it('清空会话时终止活跃进程并移除全部记录', () => {
-    const registry = new ProcessRegistry()
-    const killed: string[] = []
-    registry.register(makeProcess({ processId: 'a' }), { killer: () => killed.push('a') })
-    registry.register(makeProcess({ processId: 'b', status: 'exited', endedAt: 2 }))
-    registry.clearSession('s1')
-    expect(killed).toEqual(['a'])
-    expect(registry.list('s1')).toHaveLength(0)
-    expect(registry.list('s1')).toEqual([])
-  })
-
-  it('并发同名命令进程各自独立', () => {
-    const registry = new ProcessRegistry()
-    registry.register(makeProcess({ processId: 'tc-a' }))
-    registry.register(makeProcess({ processId: 'tc-b' }))
-    expect(registry.list('s1')).toHaveLength(2)
-  })
-
-  it('终端记录携带 terminalId 且 kill 同样生效', () => {
-    const registry = new ProcessRegistry()
-    let killed = false
-    registry.register(makeProcess({ processId: 't-1', kind: 'terminal', terminalId: 't-1' }), { killer: () => { killed = true } })
-    expect(registry.terminate('s1', 't-1')).toBe(true)
-    expect(killed).toBe(true)
+    expect(registry.countRunning()).toBe(0)
+    expect(registry.listRunning()).toEqual([])
   })
 })

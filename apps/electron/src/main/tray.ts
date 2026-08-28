@@ -1,9 +1,10 @@
-import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron'
+import { Tray, Menu, app, dialog, nativeImage, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { listAgentSessions } from './lib/agent-session-manager'
 import { listAgentWorkspaces } from './lib/agent-workspace-manager'
-import { isAgentSessionActive } from './lib/agent-service'
+import { isAgentSessionActive, agentSessionProcessService } from './lib/agent-service'
+import { getActiveTerminalCount } from './lib/terminal-service'
 import { createTrayMenuModel, type TrayRecentSessionItem } from './lib/tray-menu-model'
 
 let tray: Tray | null = null
@@ -120,12 +121,45 @@ function buildTrayMenu(actions: TrayActions): Menu {
     {
       label: '退出 Proma',
       click: () => {
-        app.quit()
+        void confirmQuitWithRunningProcesses().then((confirmed) => {
+          if (confirmed) app.quit()
+        })
       },
     },
   ]
 
   return Menu.buildFromTemplate(template)
+}
+
+/**
+ * 退出前检查运行中的会话进程（命令进程 + 终端），
+ * 存在时弹原生确认框；无进程或用户确认终止时返回 true。
+ */
+async function confirmQuitWithRunningProcesses(): Promise<boolean> {
+  const commandCount = agentSessionProcessService.countRunningProcesses()
+  const terminalCount = getActiveTerminalCount()
+  const total = commandCount + terminalCount
+  if (total === 0) return true
+
+  const parts: string[] = []
+  if (commandCount > 0) parts.push(`${commandCount} 个命令进程`)
+  if (terminalCount > 0) parts.push(`${terminalCount} 个终端`)
+
+  const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const options = {
+    type: 'warning' as const,
+    title: '退出 Proma',
+    message: `当前有 ${parts.join('、')}正在运行。`,
+    detail: '退出 Proma 将终止这些进程。是否继续退出？',
+    buttons: ['取消', '终止进程并退出'],
+    defaultId: 1,
+    cancelId: 0,
+    noLink: true,
+  }
+  const result = window && !window.isDestroyed()
+    ? await dialog.showMessageBox(window, options)
+    : await dialog.showMessageBox(options)
+  return result.response === 1
 }
 
 function updateTrayMenu(actions: TrayActions): Menu | null {

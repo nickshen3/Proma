@@ -38,6 +38,28 @@ export class ProcessRegistry {
     return [...(this.entries.get(sessionId)?.values() ?? [])].map((entry) => ({ ...entry.process }))
   }
 
+  /** 全局查询所有运行中的进程（退出确认提醒用）。 */
+  listRunning(): SessionProcessInfo[] {
+    const running: SessionProcessInfo[] = []
+    for (const byId of this.entries.values()) {
+      for (const entry of byId.values()) {
+        if (entry.process.status === 'running') running.push({ ...entry.process })
+      }
+    }
+    return running
+  }
+
+  /** 全局查询运行中进程数（退出确认提醒用）。 */
+  countRunning(): number {
+    let count = 0
+    for (const byId of this.entries.values()) {
+      for (const entry of byId.values()) {
+        if (entry.process.status === 'running') count += 1
+      }
+    }
+    return count
+  }
+
   /** 移除单条记录（不触发终止；用于会话删除清理前的逐条 removed 事件）。 */
   remove(sessionId: string, processId: string): boolean {
     const byId = this.entries.get(sessionId)

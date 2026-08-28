@@ -50,6 +50,11 @@ export class SessionProcessService {
     return this.registry.list(sessionId)
   }
 
+  /** 全局查询运行中的命令进程数（退出确认提醒用）。 */
+  countRunningProcesses(): number {
+    return this.registry.countRunning()
+  }
+
   readOutput(sessionId: string, processId: string, offset: number): SessionProcessOutputChunk {
     return this.buffers.get(bufferKey(sessionId, processId))?.read(offset) ?? { offset, nextOffset: offset, truncated: false, data: '' }
   }

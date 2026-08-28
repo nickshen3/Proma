@@ -716,6 +716,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
 
   /** 待删除对话 ID，非空时显示确认弹窗 */
   const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null)
+  /** 待删除会话（含级联子会话）中运行中的进程数；用于删除前终止提醒 */
+  const [pendingDeleteRunningProcesses, setPendingDeleteRunningProcesses] = React.useState(0)
   /** 待删除项目 ID，非空时显示项目删除确认弹窗 */
   const [pendingDeleteWorkspaceId, setPendingDeleteWorkspaceId] = React.useState<string | null>(null)
   const [deletingWorkspaceId, setDeletingWorkspaceId] = React.useState<string | null>(null)
@@ -1114,9 +1116,29 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [openSession, setActiveView])
 
   /** 请求删除对话（弹出确认框） */
+  const pendingDeleteIdRef = React.useRef<string | null>(null)
   const handleRequestDelete = React.useCallback((id: string): void => {
     setPendingDeleteId(id)
-  }, [])
+    pendingDeleteIdRef.current = id
+    setPendingDeleteRunningProcesses(0)
+    if (mode !== 'agent') return
+    // 查询该会话及其子会话中运行中的进程数，用于删除确认弹窗的终止提醒
+    const cascadeIds = [id, ...getDirectDelegatedChildren(agentSessions, id).map((child) => child.id)]
+    void Promise.all(
+      cascadeIds.map((sessionId) =>
+        window.electronAPI
+          .listSessionProcesses(sessionId)
+          .then((list) => list.filter((process) => process.status === 'running').length)
+          .catch(() => 0),
+      ),
+    )
+      .then((counts) => {
+        // 仅当确认弹窗仍指向本次删除的会话时才应用结果，避免快速切换目标时的竞态
+        if (pendingDeleteIdRef.current !== id) return
+        setPendingDeleteRunningProcesses(counts.reduce((a, b) => a + b, 0))
+      })
+      .catch(() => { /* 查询失败按 0 处理，不阻塞删除流程 */ })
+  }, [mode, agentSessions])
 
   /** 重命名对话标题 */
   const handleRename = React.useCallback(async (id: string, newTitle: string): Promise<void> => {
@@ -2444,6 +2466,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             {mode === 'agent' && pendingDeleteChildCount > 0
               ? `此会话下还有 ${pendingDeleteChildCount} 个子会话。删除后将无法恢复，请选择是否一并删除子会话。`
               : '删除后将无法恢复，确定要删除这个对话吗？'}
+            {mode === 'agent' && pendingDeleteRunningProcesses > 0 && (
+              <span className="block mt-1.5 text-destructive">
+                ⚠ 此会话（含子会话）有 {pendingDeleteRunningProcesses} 个运行中的进程，删除时将被终止。
+              </span>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
