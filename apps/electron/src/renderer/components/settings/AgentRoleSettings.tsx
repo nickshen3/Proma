@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { FolderPlus, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,7 +20,7 @@ import { SettingsSection, SettingsCard } from './primitives'
 import { AGENT_ROLE_ICON_MAP } from '@/components/agent/AgentRoleBadge'
 import { agentRoleConfigAtom } from '@/atoms/agent-role-atoms'
 import { cn } from '@/lib/utils'
-import type { AgentRole, AgentRoleColor, AgentRoleIcon } from '@proma/shared'
+import type { AgentRole, AgentRoleColor, AgentRoleGroup, AgentRoleIcon } from '@proma/shared'
 
 const COLOR_OPTIONS: readonly AgentRoleColor[] = ['blue', 'green', 'violet', 'orange', 'pink', 'cyan', 'amber', 'slate']
 const COLOR_SWATCH: Record<AgentRoleColor, string> = {
@@ -44,6 +44,8 @@ interface RoleDraft {
   icon: AgentRoleIcon
   color: AgentRoleColor
   disabled: boolean
+  /** 所属分组：空串 = 未分组 */
+  groupId: string
 }
 
 const NEW_DRAFT: RoleDraft = {
@@ -55,6 +57,7 @@ const NEW_DRAFT: RoleDraft = {
   icon: 'bot',
   color: 'blue',
   disabled: false,
+  groupId: '',
 }
 
 function toDraft(role: AgentRole): RoleDraft {
@@ -67,6 +70,7 @@ function toDraft(role: AgentRole): RoleDraft {
     icon: role.icon ?? 'bot',
     color: role.color ?? 'slate',
     disabled: role.disabled === true,
+    groupId: role.groupId ?? '',
   }
 }
 
@@ -87,6 +91,40 @@ export function AgentRoleSettings(): React.ReactElement {
 
   const startEdit = (role: AgentRole): void => setDraft(toDraft(role))
 
+  /** 分组名编辑态（重命名） */
+  const [renamingGroup, setRenamingGroup] = React.useState<{ id: string; name: string } | null>(null)
+
+  const createGroup = async (): Promise<void> => {
+    try {
+      const group = await window.electronAPI.createAgentRoleGroup({ name: '新分组' })
+      refresh()
+      setRenamingGroup({ id: group.id, name: group.name })
+    } catch (error) {
+      toast.error('创建分组失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const renameGroup = async (): Promise<void> => {
+    if (!renamingGroup) return
+    try {
+      await window.electronAPI.updateAgentRoleGroup({ id: renamingGroup.id, name: renamingGroup.name })
+      setRenamingGroup(null)
+      refresh()
+    } catch (error) {
+      toast.error('重命名失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const removeGroup = async (group: AgentRoleGroup): Promise<void> => {
+    try {
+      await window.electronAPI.deleteAgentRoleGroup(group.id)
+      toast.success(`已删除分组「${group.name}」（组内角色归入未分组）`)
+      refresh()
+    } catch (error) {
+      toast.error('删除分组失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   const saveDraft = async (): Promise<void> => {
     if (!draft) return
     if (!draft.name.trim() || !draft.systemPrompt.trim()) {
@@ -103,6 +141,7 @@ export function AgentRoleSettings(): React.ReactElement {
           modelId: draft.modelId || undefined,
           icon: draft.icon,
           color: draft.color,
+          ...(draft.groupId ? { groupId: draft.groupId } : {}),
         })
         toast.success(`已创建角色「${draft.name.trim()}」`)
         refresh()
@@ -119,6 +158,7 @@ export function AgentRoleSettings(): React.ReactElement {
           icon: draft.icon,
           color: draft.color,
           disabled: draft.disabled || undefined,
+          groupId: draft.groupId || null,
         })
         toast.success(`已保存角色「${draft.name.trim()}」`)
         refresh()
@@ -167,6 +207,8 @@ export function AgentRoleSettings(): React.ReactElement {
   const builtinRoles = config?.roles.filter((role) => role.builtin) ?? []
   const customRoles = config?.roles.filter((role) => !role.builtin) ?? []
   const editingBuiltin = draft ? (config?.roles.find((role) => role.id === draft.id)?.builtin ?? false) : false
+  const groups = config?.groups ?? []
+  const allRoles = config?.roles ?? []
 
   const renderRoleRow = (role: AgentRole): React.ReactElement => {
     const Icon = role.icon ? AGENT_ROLE_ICON_MAP[role.icon] : undefined
@@ -200,6 +242,61 @@ export function AgentRoleSettings(): React.ReactElement {
     )
   }
 
+  const renderGroupSection = (group: AgentRoleGroup): React.ReactElement | null => {
+    const groupRoles = allRoles.filter((role) => role.groupId === group.id)
+    return (
+      <div key={group.id} className="flex flex-col gap-0.5">
+        <div className="group/head flex items-center gap-1 pt-1 px-2">
+          {renamingGroup?.id === group.id ? (
+            <>
+              <Input
+                autoFocus
+                value={renamingGroup.name}
+                onChange={(event) => setRenamingGroup({ ...renamingGroup, name: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void renameGroup()
+                  if (event.key === 'Escape') setRenamingGroup(null)
+                }}
+                className="h-5 px-1 text-[11px]"
+              />
+              <Button
+                type="button"
+                variant="ghost" size="icon" className="size-5"
+                aria-label="确认重命名"
+                onClick={() => void renameGroup()}
+              >
+                <Pencil className="size-2.5" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="text-[11px] font-medium text-muted-foreground/70 flex-1 truncate">{group.name}</span>
+              <button
+                type="button"
+                aria-label={`重命名分组 ${group.name}`}
+                className="opacity-0 group-hover/head:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                onClick={() => setRenamingGroup({ id: group.id, name: group.name })}
+              >
+                <Pencil className="size-3" />
+              </button>
+              <button
+                type="button"
+                aria-label={`删除分组 ${group.name}`}
+                className="opacity-0 group-hover/head:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                onClick={() => void removeGroup(group)}
+              >
+                <Trash2 className="size-3" />
+              </button>
+            </>
+          )}
+        </div>
+        {groupRoles.map(renderRoleRow)}
+      </div>
+    )
+  }
+
+  const ungroupedRoles = allRoles.filter((role) => !role.groupId)
+
   return (
     <SettingsSection title="Agent 角色" description="角色决定一条消息由谁执行（提示词 + 默认模型），在会话输入框的角色选择器中使用。内置与自定义角色同等可编辑可删除，内置角色可随时重置回默认；角色不改变权限边界。">
       <div className="flex gap-4">
@@ -216,27 +313,36 @@ export function AgentRoleSettings(): React.ReactElement {
                   <Plus className="size-4" />
                   新建角色
                 </button>
-                {builtinRoles.length > 0 && (
-                  <div className="pt-1 text-[11px] font-medium text-muted-foreground/70 px-2">内置</div>
+                {ungroupedRoles.length > 0 && (
+                  <div className="pt-1 text-[11px] font-medium text-muted-foreground/70 px-2">未分组</div>
                 )}
-                {builtinRoles.map(renderRoleRow)}
-                {customRoles.length > 0 && (
-                  <div className="pt-1 text-[11px] font-medium text-muted-foreground/70 px-2">自定义</div>
-                )}
-                {customRoles.map(renderRoleRow)}
+                {ungroupedRoles.map(renderRoleRow)}
+                {groups.map(renderGroupSection)}
               </div>
             </ScrollArea>
           </SettingsCard>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="justify-start gap-2 text-muted-foreground"
-            onClick={() => void resetBuiltin()}
-          >
-            <RotateCcw className="size-3.5" />
-            重置内置角色
-          </Button>
+          <div className="flex flex-col gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="justify-start gap-2 text-muted-foreground"
+              onClick={() => void createGroup()}
+            >
+              <FolderPlus className="size-3.5" />
+              新建分组
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="justify-start gap-2 text-muted-foreground"
+              onClick={() => void resetBuiltin()}
+            >
+              <RotateCcw className="size-3.5" />
+              重置内置角色
+            </Button>
+          </div>
         </div>
 
         {/* 右侧编辑区 */}
@@ -247,6 +353,21 @@ export function AgentRoleSettings(): React.ReactElement {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="agent-role-group">所属分组</Label>
+                <select
+                  id="agent-role-group"
+                  value={draft.groupId}
+                  onChange={(event) => setDraft({ ...draft, groupId: event.target.value })}
+                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">未分组</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>{group.name}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="agent-role-name">名称</Label>

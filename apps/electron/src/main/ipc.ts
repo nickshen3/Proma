@@ -90,6 +90,9 @@ import type {
   AgentRole,
   AgentRoleCreateInput,
   AgentRoleUpdateInput,
+  AgentRoleGroup,
+  AgentRoleGroupCreateInput,
+  AgentRoleGroupUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -374,6 +377,9 @@ import {
   updateAgentRole,
   deleteAgentRole,
   resetBuiltinAgentRoles,
+  createAgentRoleGroup,
+  updateAgentRoleGroup,
+  deleteAgentRoleGroup,
 } from './lib/agent-role-manager'
 import {
   getLatestRelease,
@@ -4300,6 +4306,30 @@ export function registerIpcHandlers(): void {
     AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN,
     async (_, roleId?: string): Promise<AgentRoleConfig> => {
       return resetBuiltinAgentRoles(roleId)
+    }
+  )
+
+  // 创建角色分组
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.GROUP_CREATE,
+    async (_, input: AgentRoleGroupCreateInput): Promise<AgentRoleGroup> => {
+      return createAgentRoleGroup(input)
+    }
+  )
+
+  // 重命名角色分组
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.GROUP_UPDATE,
+    async (_, input: AgentRoleGroupUpdateInput): Promise<AgentRoleGroup> => {
+      return updateAgentRoleGroup(input)
+    }
+  )
+
+  // 删除角色分组（组内角色归入未分组）
+  ipcMain.handle(
+    AGENT_ROLE_IPC_CHANNELS.GROUP_DELETE,
+    async (_, groupId: string): Promise<void> => {
+      return deleteAgentRoleGroup(groupId)
     }
   )
 

@@ -182,6 +182,57 @@ describe('buildAgentRolePromptSection', () => {
   })
 })
 
+describe('Agent 角色分组', () => {
+  test('创建/重命名/删除分组；删除分组时组内角色归入未分组', () => {
+    const group = manager.createAgentRoleGroup({ name: '  我的分组  ' })
+    expect(group.name).toBe('我的分组')
+
+    const renamed = manager.updateAgentRoleGroup({ id: group.id, name: '改名分组' })
+    expect(renamed.name).toBe('改名分组')
+
+    const role = manager.createAgentRole({ name: '组内角色', systemPrompt: 'x', groupId: group.id })
+    expect(role.groupId).toBe(group.id)
+
+    manager.deleteAgentRoleGroup(group.id)
+    const config = manager.getAgentRoleConfig()
+    expect(config.groups.find((item) => item.id === group.id)).toBeUndefined()
+    expect(config.roles.find((item) => item.id === role.id)?.groupId).toBeUndefined()
+  })
+
+  test('角色归入不存在分组时安全降级为未分组', () => {
+    const created = manager.createAgentRole({ name: '孤儿测试', systemPrompt: 'x', groupId: 'no-such-group' })
+    expect(created.groupId).toBeUndefined()
+
+    const role = manager.createAgentRole({ name: '更新孤儿', systemPrompt: 'x' })
+    const updated = manager.updateAgentRole({ id: role.id, groupId: 'no-such-group' })
+    expect(updated.groupId).toBeUndefined()
+
+    const cleared = manager.updateAgentRole({ id: role.id, groupId: null })
+    expect(cleared.groupId).toBeUndefined()
+  })
+
+  test('旧格式配置（无 groups 字段）自动迁移默认分组', () => {
+    // 直接写一个无 groups 字段的旧格式文件
+    const { writeFileSync } = require('node:fs') as typeof import('node:fs')
+    const filePath = getAgentRolesPath()
+    const current = JSON.parse(readFileSync(filePath, 'utf-8'))
+    const { groups: _groups, ...legacy } = current
+    void _groups
+    writeFileSync(filePath, JSON.stringify(legacy), 'utf-8')
+
+    const config = manager.getAgentRoleConfig()
+    expect(config.groups.map((group) => group.name)).toEqual(['研发团队', '通用协作'])
+    expect(config.roles.find((item) => item.id === 'builtin-product-manager')?.groupId).toBe('builtin-group-dev-team')
+    expect(config.roles.find((item) => item.id === 'builtin-research')?.groupId).toBe('builtin-group-general')
+  })
+
+  test('空分组名抛错；操作不存在分组抛错', () => {
+    expect(() => manager.createAgentRoleGroup({ name: '  ' })).toThrow()
+    expect(() => manager.updateAgentRoleGroup({ id: 'no-such-group', name: 'x' })).toThrow()
+    expect(() => manager.deleteAgentRoleGroup('no-such-group')).toThrow()
+  })
+})
+
 describe('getAgentRoleConfig / resolveExecutableAgentRole', () => {
   test('配置不存在时返回全部内置角色的安全默认', () => {
     const config = manager.getAgentRoleConfig()

@@ -86,6 +86,9 @@ import type {
   AgentRole,
   AgentRoleCreateInput,
   AgentRoleUpdateInput,
+  AgentRoleGroup,
+  AgentRoleGroupCreateInput,
+  AgentRoleGroupUpdateInput,
   ChatToolInfo,
   ChatToolState,
   ChatToolMeta,
@@ -1014,6 +1017,15 @@ export interface ElectronAPI {
 
   /** 重置内置角色为源码默认（指定 roleId 恢复单个；缺省恢复全部） */
   resetBuiltinAgentRoles: (roleId?: string) => Promise<AgentRoleConfig>
+
+  /** 创建角色分组 */
+  createAgentRoleGroup: (input: AgentRoleGroupCreateInput) => Promise<AgentRoleGroup>
+
+  /** 重命名角色分组 */
+  updateAgentRoleGroup: (input: AgentRoleGroupUpdateInput) => Promise<AgentRoleGroup>
+
+  /** 删除角色分组（组内角色归入未分组） */
+  deleteAgentRoleGroup: (groupId: string) => Promise<void>
 
   /** 设置默认提示词 */
   setDefaultPrompt: (id: string | null) => Promise<void>
@@ -2493,6 +2505,18 @@ const electronAPI: ElectronAPI = {
 
   resetBuiltinAgentRoles: (roleId?: string) => {
     return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN, roleId)
+  },
+
+  createAgentRoleGroup: (input: AgentRoleGroupCreateInput) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.GROUP_CREATE, input)
+  },
+
+  updateAgentRoleGroup: (input: AgentRoleGroupUpdateInput) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.GROUP_UPDATE, input)
+  },
+
+  deleteAgentRoleGroup: (groupId: string) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.GROUP_DELETE, groupId)
   },
 
   setDefaultPrompt: (id: string | null) => {

@@ -36,12 +36,24 @@ export type AgentRoleColor =
   | 'amber'
   | 'slate'
 
+/** 角色分组（用户数据，可创建/重命名/删除；删除组时组内角色归入未分组） */
+export interface AgentRoleGroup {
+  /** 唯一标识 */
+  id: string
+  /** 分组名 */
+  name: string
+  /** 创建时间 */
+  createdAt: number
+}
+
 /** Agent 角色 */
 export interface AgentRole {
   /** 唯一标识 */
   id: string
   /** 展示名 */
   name: string
+  /** 所属分组 ID（缺省 = 未分组） */
+  groupId?: string
   /** 一句话职责描述（选择器 tooltip 与管理列表使用） */
   description?: string
   /** 角色提示词追加段（拼入本轮 systemPromptAppend） */
@@ -74,6 +86,8 @@ export interface AgentRole {
 export interface AgentRoleConfig {
   /** 角色列表（内置在前，按源码顺序；自定义按创建时间） */
   roles: AgentRole[]
+  /** 角色分组（用户可管理；旧格式无此字段时自动迁移默认分组） */
+  groups: AgentRoleGroup[]
   /** 全局默认角色 ID；缺省 = 主助手（无角色，现状行为） */
   defaultRoleId?: string
   /** 用户已删除的内置角色 ID：重启后不得被源码重新“复活” */
@@ -88,6 +102,8 @@ export interface AgentRoleCreateInput {
   modelId?: string
   icon?: AgentRoleIcon
   color?: AgentRoleColor
+  /** 所属分组 ID（缺省 = 未分组） */
+  groupId?: string
 }
 
 /** 更新角色输入（内置与自定义一视同仁，均允许全字段编辑） */
@@ -100,6 +116,19 @@ export interface AgentRoleUpdateInput {
   icon?: AgentRoleIcon
   color?: AgentRoleColor
   disabled?: boolean
+  /** 所属分组；传 null 清除归入未分组 */
+  groupId?: string | null
+}
+
+/** 创建分组输入 */
+export interface AgentRoleGroupCreateInput {
+  name: string
+}
+
+/** 更新分组输入 */
+export interface AgentRoleGroupUpdateInput {
+  id: string
+  name: string
 }
 
 /** 内置角色：研究员（对齐 AgentDelegationRole 'research'） */
@@ -270,13 +299,48 @@ export const AGENT_ROLE_IPC_CHANNELS = {
   DELETE: 'agent-role:delete',
   /** 重置内置角色（用源码内容覆盖，仅保留 disabled） */
   RESET_BUILTIN: 'agent-role:reset-builtin',
+  /** 创建分组 */
+  GROUP_CREATE: 'agent-role:group-create',
+  /** 重命名分组 */
+  GROUP_UPDATE: 'agent-role:group-update',
+  /** 删除分组（组内角色归入未分组） */
+  GROUP_DELETE: 'agent-role:group-delete',
   /** 主进程通知 Renderer：角色配置已变更 */
   CONFIG_UPDATED: 'agent-role:config-updated',
 } as const
 
-/** 未知/损坏输入回退用的默认配置（仅内置角色） */
+/** 旧格式配置首次启用分组时的默认分组（内置角色自动归组） */
+const DEFAULT_GROUP_DEV_TEAM = 'builtin-group-dev-team'
+const DEFAULT_GROUP_GENERAL = 'builtin-group-general'
+
+/** 默认分组定义（研发团队 + 通用协作） */
+export const DEFAULT_AGENT_ROLE_GROUPS: readonly AgentRoleGroup[] = [
+  { id: DEFAULT_GROUP_DEV_TEAM, name: '研发团队', createdAt: 0 },
+  { id: DEFAULT_GROUP_GENERAL, name: '通用协作', createdAt: 1 },
+]
+
+/** 内置角色 → 默认分组归属（重置角色时恢复归组） */
+export const BUILTIN_ROLE_DEFAULT_GROUP: Readonly<Record<string, string>> = {
+  'builtin-product-manager': DEFAULT_GROUP_DEV_TEAM,
+  'builtin-frontend-engineer': DEFAULT_GROUP_DEV_TEAM,
+  'builtin-backend-engineer': DEFAULT_GROUP_DEV_TEAM,
+  'builtin-test-engineer': DEFAULT_GROUP_DEV_TEAM,
+  'builtin-research': DEFAULT_GROUP_GENERAL,
+  'builtin-explore': DEFAULT_GROUP_GENERAL,
+  'builtin-implement': DEFAULT_GROUP_GENERAL,
+  'builtin-review': DEFAULT_GROUP_GENERAL,
+}
+
+/** 未知/损坏输入回退用的默认配置（仅内置角色，已归入默认分组） */
 export function getDefaultAgentRoleConfig(): AgentRoleConfig {
-  return { roles: BUILTIN_AGENT_ROLES.map((role) => ({ ...role })) }
+  return {
+    roles: BUILTIN_AGENT_ROLES.map((role) => ({
+      ...role,
+      ...(BUILTIN_ROLE_DEFAULT_GROUP[role.id] ? { groupId: BUILTIN_ROLE_DEFAULT_GROUP[role.id] } : {}),
+    })),
+    groups: DEFAULT_AGENT_ROLE_GROUPS.map((group) => ({ ...group })),
+    deletedBuiltinRoleIds: [],
+  }
 }
 
 function isValidAgentRoleIcon(value: unknown): value is AgentRoleIcon {
@@ -315,10 +379,26 @@ function coerceAgentRole(value: unknown): AgentRole | undefined {
   if (typeof record.modelId === 'string' && record.modelId.length > 0) {
     role.modelId = record.modelId
   }
+  if (typeof record.groupId === 'string' && record.groupId.length > 0) {
+    role.groupId = record.groupId
+  }
   if (isValidAgentRoleIcon(record.icon)) role.icon = record.icon
   if (isValidAgentRoleColor(record.color)) role.color = record.color
   if (record.disabled === true) role.disabled = true
   return role
+}
+
+/** 结构校验：宽松解析分组；不合法返回 undefined */
+function coerceAgentRoleGroup(value: unknown): AgentRoleGroup | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.id !== 'string' || record.id.length === 0) return undefined
+  if (typeof record.name !== 'string' || record.name.trim().length === 0) return undefined
+  return {
+    id: record.id,
+    name: record.name.trim(),
+    createdAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
+  }
 }
 
 /**
@@ -330,11 +410,13 @@ function coerceAgentRole(value: unknown): AgentRole | undefined {
  * - deletedBuiltinRoleIds 中的内置角色 → 不出现（用户删除，不得复活）；
  * - 源码已移除的内置 id 记录（降级场景）→ 丢弃；
  * - 自定义角色：结构校验通过即保留，按创建时间排序，内置在前；
+ * - 分组：groups 字段缺省（旧格式）→ 一次性迁移默认分组并把内置角色归组；
+ *   指向不存在分组的孤儿 groupId → 清除（归入未分组）；
  * - defaultRoleId 不存在（或指向被删角色）时清空；
- * - 任何结构问题都回退为“仅内置角色”的安全默认，不抛出。
+ * - 任何结构问题都回退为“仅内置角色 + 默认分组”的安全默认，不抛出。
  */
 export function mergeAgentRoleConfig(raw: unknown): AgentRoleConfig {
-  const fallback: AgentRoleConfig = { ...getDefaultAgentRoleConfig(), deletedBuiltinRoleIds: [] }
+  const fallback = getDefaultAgentRoleConfig()
   if (typeof raw !== 'object' || raw === null) return fallback
   const record = raw as Record<string, unknown>
   if (!Array.isArray(record.roles)) return fallback
@@ -360,25 +442,67 @@ export function mergeAgentRoleConfig(raw: unknown): AgentRoleConfig {
     : []
   const deletedBuiltinIds = new Set(rawDeleted)
 
-  // 内置角色：磁盘版本优先；未删除且无磁盘记录时以源码版本出现
+  // 分组解析：旧格式（groups 字段缺省）→ 补入默认分组并给内置角色归组
+  const isLegacyFormat = record.groups === undefined
+  const parsedGroups = Array.isArray(record.groups)
+    ? record.groups
+        .map((item) => coerceAgentRoleGroup(item))
+        .filter((item): item is AgentRoleGroup => item !== undefined)
+    : []
+  // id 去重
+  const groupIds = new Set<string>()
+  const groups: AgentRoleGroup[] = []
+  for (const group of parsedGroups) {
+    if (groupIds.has(group.id)) continue
+    groupIds.add(group.id)
+    groups.push(group)
+  }
+  if (isLegacyFormat) {
+    for (const group of DEFAULT_AGENT_ROLE_GROUPS) {
+      if (!groupIds.has(group.id)) {
+        groupIds.add(group.id)
+        groups.push({ ...group })
+      }
+    }
+  }
+
+  // 内置角色：磁盘版本优先；未删除且无磁盘记录时以源码版本出现；
+  // 旧格式迁移时未指定分组的内置角色归入默认分组
   const diskBuiltinById = new Map(
     parsed.filter((role) => builtinIds.has(role.id)).map((role) => [role.id, role]),
   )
   const mergedBuiltin = BUILTIN_AGENT_ROLES
     .filter((role) => !deletedBuiltinIds.has(role.id))
-    .map((role) => ({ ...role, ...(diskBuiltinById.get(role.id) ?? {}), builtin: true }))
+    .map((role) => {
+      const disk = diskBuiltinById.get(role.id)
+      const merged: AgentRole = { ...role, ...(disk ?? {}), builtin: true }
+      if (isLegacyFormat && !merged.groupId) {
+        const defaultGroupId = BUILTIN_ROLE_DEFAULT_GROUP[role.id]
+        if (defaultGroupId && groupIds.has(defaultGroupId)) {
+          merged.groupId = defaultGroupId
+        }
+      }
+      return merged
+    })
 
-  const roles = [...mergedBuiltin, ...customRoles]
+  // 孤儿 groupId 清理：指向不存在分组的归入未分组
+  const allRoles: AgentRole[] = [...mergedBuiltin, ...customRoles].map((role) => {
+    if (!role.groupId || groupIds.has(role.groupId)) return role
+    const next = { ...role }
+    delete next.groupId
+    return next
+  })
 
   // defaultRoleId 校验：必须指向存在且未禁用的角色
   let defaultRoleId: string | undefined
   if (typeof record.defaultRoleId === 'string') {
-    const target = roles.find((role) => role.id === record.defaultRoleId)
+    const target = allRoles.find((role) => role.id === record.defaultRoleId)
     if (target && !target.disabled) defaultRoleId = target.id
   }
 
   return {
-    roles,
+    roles: allRoles,
+    groups,
     ...(defaultRoleId ? { defaultRoleId } : {}),
     ...(rawDeleted.length > 0 ? { deletedBuiltinRoleIds: rawDeleted } : {}),
   }

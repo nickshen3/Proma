@@ -65,8 +65,8 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
   }, [hydrated, sessions, sessionId, setSelection, setLocked, setHydrated])
 
   const enabledRoles = config?.roles.filter((role) => !role.disabled) ?? []
-  const builtinRoles = enabledRoles.filter((role) => role.builtin)
-  const customRoles = enabledRoles.filter((role) => !role.builtin)
+  const groups = config?.groups ?? []
+  const ungroupedRoles = enabledRoles.filter((role) => !role.groupId)
   const selectedRole = enabledRoles.find((role) => role.id === selection)
 
   /** 持久化/清除锁定的角色 */
@@ -140,19 +140,24 @@ export function RoleSelector({ sessionId }: RoleSelectorProps): React.ReactEleme
             {!selection && <Check className="size-3.5 shrink-0" />}
           </DropdownMenuItem>
 
-          {builtinRoles.length > 0 && (
+          {ungroupedRoles.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              {builtinRoles.map(renderRoleItem)}
+              {ungroupedRoles.map(renderRoleItem)}
             </>
           )}
 
-          {customRoles.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              {customRoles.map(renderRoleItem)}
-            </>
-          )}
+          {groups.map((group) => {
+            const groupRoles = enabledRoles.filter((role) => role.groupId === group.id)
+            if (groupRoles.length === 0) return null
+            return (
+              <React.Fragment key={group.id}>
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground/70">{group.name}</div>
+                {groupRoles.map(renderRoleItem)}
+              </React.Fragment>
+            )
+          })}
 
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={toggleLock} className="gap-2">

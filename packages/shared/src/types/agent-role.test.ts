@@ -14,12 +14,15 @@ import {
 } from './agent-role'
 
 describe('getDefaultAgentRoleConfig', () => {
-  test('默认配置包含全部 8 个内置角色', () => {
+  test('默认配置包含全部 8 个内置角色与 2 个默认分组', () => {
     const config = getDefaultAgentRoleConfig()
     expect(config.roles).toHaveLength(BUILTIN_AGENT_ROLES.length)
     expect(config.roles.every((role) => role.builtin)).toBe(true)
     expect(config.defaultRoleId).toBeUndefined()
-    expect(config.deletedBuiltinRoleIds).toBeUndefined()
+    expect(config.deletedBuiltinRoleIds).toEqual([])
+    expect(config.groups.map((group) => group.name)).toEqual(['研发团队', '通用协作'])
+    // 内置角色均已归组
+    expect(config.roles.every((role) => role.groupId !== undefined)).toBe(true)
   })
 
   test('内置角色集包含新增的研发流程角色', () => {
@@ -161,5 +164,55 @@ describe('mergeAgentRoleConfig', () => {
       defaultRoleId: 'builtin-research',
     })
     expect(disabled.defaultRoleId).toBeUndefined()
+  })
+})
+
+describe('mergeAgentRoleConfig 分组逻辑', () => {
+  test('旧格式（无 groups 字段）自动迁移默认分组并归入内置角色', () => {
+    const config = mergeAgentRoleConfig({ roles: [] })
+    expect(config.groups.map((group) => group.name)).toEqual(['研发团队', '通用协作'])
+    const pm = config.roles.find((role) => role.id === 'builtin-product-manager')
+    const research = config.roles.find((role) => role.id === 'builtin-research')
+    expect(pm?.groupId).toBe('builtin-group-dev-team')
+    expect(research?.groupId).toBe('builtin-group-general')
+  })
+
+  test('旧格式迁移时保留用户已指定的分组归属', () => {
+    const config = mergeAgentRoleConfig({
+      roles: [{ ...BUILTIN_ROLE_RESEARCH, groupId: 'builtin-group-dev-team' }],
+    })
+    expect(config.roles.find((role) => role.id === 'builtin-research')?.groupId).toBe('builtin-group-dev-team')
+  })
+
+  test('新格式不注入默认分组：groups 为空数组时保持空（用户已删光分组）', () => {
+    const config = mergeAgentRoleConfig({ roles: [], groups: [] })
+    expect(config.groups).toEqual([])
+  })
+
+  test('用户分组被保留，非法分组项被丢弃', () => {
+    const config = mergeAgentRoleConfig({
+      roles: [],
+      groups: [
+        { id: 'g1', name: '我的分组', createdAt: 1 },
+        { id: '', name: '无 id' },
+        { id: 'g3' },
+        'garbage',
+        { id: 'g1', name: '重复 id' },
+      ],
+    })
+    expect(config.groups.map((group) => group.id)).toEqual(['g1'])
+    expect(config.groups[0]?.name).toBe('我的分组')
+  })
+
+  test('孤儿 groupId 被清除（指向已删除/不存在的分组）', () => {
+    const config = mergeAgentRoleConfig({
+      roles: [
+        { id: 'custom-a', name: 'A', systemPrompt: 'a', builtin: false, createdAt: 1, groupId: 'gone-group' },
+        { id: 'custom-b', name: 'B', systemPrompt: 'b', builtin: false, createdAt: 2, groupId: 'g1' },
+      ],
+      groups: [{ id: 'g1', name: '存在', createdAt: 1 }],
+    })
+    expect(config.roles.find((role) => role.id === 'custom-a')?.groupId).toBeUndefined()
+    expect(config.roles.find((role) => role.id === 'custom-b')?.groupId).toBe('g1')
   })
 })

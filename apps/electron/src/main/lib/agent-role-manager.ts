@@ -12,11 +12,14 @@
 import { randomUUID } from 'node:crypto'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 import { getAgentRolesPath } from './config-paths'
-import { BUILTIN_AGENT_ROLES, mergeAgentRoleConfig } from '@proma/shared'
+import { BUILTIN_AGENT_ROLES, BUILTIN_ROLE_DEFAULT_GROUP, mergeAgentRoleConfig } from '@proma/shared'
 import type {
   AgentRole,
   AgentRoleConfig,
   AgentRoleCreateInput,
+  AgentRoleGroup,
+  AgentRoleGroupCreateInput,
+  AgentRoleGroupUpdateInput,
   AgentRoleUpdateInput,
 } from '@proma/shared'
 
@@ -55,6 +58,10 @@ export function createAgentRole(input: AgentRoleCreateInput): AgentRole {
     ...(input.modelId?.trim() ? { modelId: input.modelId.trim() } : {}),
     ...(input.icon ? { icon: input.icon } : {}),
     ...(input.color ? { color: input.color } : {}),
+    // 仅当分组存在时归组，否则保持未分组（孤儿由 merge 清理，这里提前避免）
+    ...(input.groupId && config.groups.some((group) => group.id === input.groupId)
+      ? { groupId: input.groupId }
+      : {}),
   }
   config.roles.push(role)
   persist(config)
@@ -91,6 +98,13 @@ export function updateAgentRole(input: AgentRoleUpdateInput): AgentRole {
   if (input.icon !== undefined) role.icon = input.icon
   if (input.color !== undefined) role.color = input.color
   if (input.disabled !== undefined) role.disabled = input.disabled || undefined
+  if (input.groupId !== undefined) {
+    if (input.groupId === null || !config.groups.some((group) => group.id === input.groupId)) {
+      delete role.groupId
+    } else {
+      role.groupId = input.groupId
+    }
+  }
   role.updatedAt = Date.now()
   persist(config)
   return role
@@ -121,11 +135,21 @@ export function deleteAgentRole(roleId: string): void {
 /**
  * 重置内置角色为源码默认。
  * - 指定 roleId：恢复单个内置角色（清除用户修改，并从删除记录中找回）；
- * - 未指定：恢复全部内置角色（自定义角色不受影响）。
+ * - 未指定：恢复全部内置角色（自定义角色不受影响）；
+ * - 重置后角色归入默认分组（若分组仍存在，否则保持未分组）。
  */
 export function resetBuiltinAgentRoles(roleId?: string): AgentRoleConfig {
   const config = getAgentRoleConfig()
   const builtinById = new Map(BUILTIN_AGENT_ROLES.map((role) => [role.id, role]))
+  const groupIds = new Set(config.groups.map((group) => group.id))
+
+  const withDefaultGroup = (role: AgentRole): AgentRole => {
+    const defaultGroupId = BUILTIN_ROLE_DEFAULT_GROUP[role.id]
+    if (defaultGroupId && groupIds.has(defaultGroupId)) {
+      return { ...role, groupId: defaultGroupId }
+    }
+    return role
+  }
 
   if (roleId) {
     const source = builtinById.get(roleId)
@@ -136,7 +160,7 @@ export function resetBuiltinAgentRoles(roleId?: string): AgentRoleConfig {
     const insertBefore = rest.findIndex(
       (item) => item.builtin && BUILTIN_AGENT_ROLES.findIndex((role) => role.id === item.id) > sourceIndex,
     )
-    const resetRole: AgentRole = { ...source, updatedAt: Date.now() }
+    const resetRole: AgentRole = withDefaultGroup({ ...source, updatedAt: Date.now() })
     if (insertBefore === -1) {
       rest.push(resetRole)
     } else {
@@ -144,15 +168,17 @@ export function resetBuiltinAgentRoles(roleId?: string): AgentRoleConfig {
     }
     return persistAndReturn({
       roles: rest,
+      groups: config.groups,
       ...(config.defaultRoleId ? { defaultRoleId: config.defaultRoleId } : {}),
       deletedBuiltinRoleIds: (config.deletedBuiltinRoleIds ?? []).filter((id) => id !== roleId),
     })
   }
 
-  // 全量重置：自定义角色保留，内置全部恢复源码版本，清空删除记录
+  // 全量重置：自定义角色保留，内置全部恢复源码版本（含默认归组），清空删除记录
   const customRoles = config.roles.filter((item) => !item.builtin)
   return persistAndReturn({
-    roles: [...BUILTIN_AGENT_ROLES.map((role) => ({ ...role })), ...customRoles],
+    roles: [...BUILTIN_AGENT_ROLES.map((role) => withDefaultGroup({ ...role })), ...customRoles],
+    groups: config.groups,
     ...(config.defaultRoleId ? { defaultRoleId: config.defaultRoleId } : {}),
   })
 }
@@ -161,6 +187,42 @@ export function resetBuiltinAgentRoles(roleId?: string): AgentRoleConfig {
 function persistAndReturn(config: AgentRoleConfig): AgentRoleConfig {
   persist(config)
   return getAgentRoleConfig()
+}
+
+/** 创建分组 */
+export function createAgentRoleGroup(input: AgentRoleGroupCreateInput): AgentRoleGroup {
+  const name = input.name?.trim()
+  if (!name) throw new Error('分组名称不能为空')
+  const config = getAgentRoleConfig()
+  const group: AgentRoleGroup = { id: randomUUID(), name, createdAt: Date.now() }
+  config.groups.push(group)
+  persist(config)
+  return group
+}
+
+/** 重命名分组（保持角色归属不变） */
+export function updateAgentRoleGroup(input: AgentRoleGroupUpdateInput): AgentRoleGroup {
+  const name = input.name?.trim()
+  if (!name) throw new Error('分组名称不能为空')
+  const config = getAgentRoleConfig()
+  const group = config.groups.find((item) => item.id === input.id)
+  if (!group) throw new Error(`分组不存在: ${input.id}`)
+  group.name = name
+  persist(config)
+  return group
+}
+
+/** 删除分组：组内角色的 groupId 清空（归入未分组），角色本身保留 */
+export function deleteAgentRoleGroup(groupId: string): void {
+  const config = getAgentRoleConfig()
+  const index = config.groups.findIndex((item) => item.id === groupId)
+  if (index === -1) throw new Error(`分组不存在: ${groupId}`)
+
+  config.groups.splice(index, 1)
+  for (const role of config.roles) {
+    if (role.groupId === groupId) delete role.groupId
+  }
+  persist(config)
 }
 
 /**
