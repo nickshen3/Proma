@@ -16,6 +16,13 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { SettingsSection, SettingsCard } from './primitives'
 import { AGENT_ROLE_ICON_MAP } from '@/components/agent/AgentRoleBadge'
 import { agentRoleConfigAtom } from '@/atoms/agent-role-atoms'
@@ -355,17 +362,21 @@ export function AgentRoleSettings(): React.ReactElement {
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="agent-role-group">所属分组</Label>
-                <select
-                  id="agent-role-group"
-                  value={draft.groupId}
-                  onChange={(event) => setDraft({ ...draft, groupId: event.target.value })}
-                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                {/* Radix Select 不允许空 value，用哨兵值表示未分组 */}
+                <Select
+                  value={draft.groupId || '__none__'}
+                  onValueChange={(value) => setDraft({ ...draft, groupId: value === '__none__' ? '' : value })}
                 >
-                  <option value="">未分组</option>
-                  {groups.map((group) => (
-                    <option key={group.id} value={group.id}>{group.name}</option>
-                  ))}
-                </select>
+                  <SelectTrigger id="agent-role-group" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">未分组</SelectItem>
+                    {groups.map((group) => (
+                      <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
