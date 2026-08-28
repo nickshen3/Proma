@@ -109,22 +109,17 @@ export function AgentRoleSettings(): React.ReactElement {
         // 立即进入新角色的编辑态，便于继续完善
         setDraft({ ...toDraft(created) })
       } else {
-        const existing = config?.roles.find((role) => role.id === draft.id)
-        if (existing?.builtin) {
-          // 内置角色仅允许 disabled
-          await window.electronAPI.updateAgentRole({ id: draft.id, disabled: draft.disabled || undefined })
-        } else {
-          await window.electronAPI.updateAgentRole({
-            id: draft.id,
-            name: draft.name,
-            description: draft.description,
-            systemPrompt: draft.systemPrompt,
-            modelId: draft.modelId || null,
-            icon: draft.icon,
-            color: draft.color,
-            disabled: draft.disabled || undefined,
-          })
-        }
+        // 内置与自定义同等：均允许全字段编辑
+        await window.electronAPI.updateAgentRole({
+          id: draft.id,
+          name: draft.name,
+          description: draft.description,
+          systemPrompt: draft.systemPrompt,
+          modelId: draft.modelId || null,
+          icon: draft.icon,
+          color: draft.color,
+          disabled: draft.disabled || undefined,
+        })
         toast.success(`已保存角色「${draft.name.trim()}」`)
         refresh()
       }
@@ -136,14 +131,26 @@ export function AgentRoleSettings(): React.ReactElement {
   }
 
   const removeRole = async (role: AgentRole): Promise<void> => {
-    if (role.builtin) return
     try {
       await window.electronAPI.deleteAgentRole(role.id)
-      toast.success(`已删除角色「${role.name}」`)
+      toast.success(`已删除角色「${role.name}」${role.builtin ? '（可在「重置内置角色」找回）' : ''}`)
       if (draft?.id === role.id) setDraft(null)
       refresh()
     } catch (error) {
       toast.error('删除失败', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const resetOneBuiltin = async (): Promise<void> => {
+    if (!draft?.id) return
+    try {
+      const next = await window.electronAPI.resetBuiltinAgentRoles(draft.id)
+      setConfig(next)
+      toast.success('已重置为源码默认')
+      const restored = next.roles.find((role) => role.id === draft.id)
+      if (restored) setDraft(toDraft(restored))
+    } catch (error) {
+      toast.error('重置失败', { description: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -176,27 +183,25 @@ export function AgentRoleSettings(): React.ReactElement {
         {Icon && <Icon className="size-4 shrink-0 text-muted-foreground" />}
         <span className="flex-1 truncate">{role.name}</span>
         {role.builtin && <span className="text-[10px] text-muted-foreground shrink-0">内置</span>}
-        {!role.builtin && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-6 shrink-0"
-            aria-label={`删除角色 ${role.name}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              void removeRole(role)
-            }}
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-6 shrink-0"
+          aria-label={`删除角色 ${role.name}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            void removeRole(role)
+          }}
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
       </div>
     )
   }
 
   return (
-    <SettingsSection title="Agent 角色" description="角色决定一条消息由谁执行（提示词 + 默认模型），在会话输入框的角色选择器中使用。角色不改变权限边界。">
+    <SettingsSection title="Agent 角色" description="角色决定一条消息由谁执行（提示词 + 默认模型），在会话输入框的角色选择器中使用。内置与自定义角色同等可编辑可删除，内置角色可随时重置回默认；角色不改变权限边界。">
       <div className="flex gap-4">
         {/* 左侧列表 */}
         <div className="w-56 shrink-0 flex flex-col gap-2">
@@ -248,7 +253,6 @@ export function AgentRoleSettings(): React.ReactElement {
                   <Input
                     id="agent-role-name"
                     value={draft.name}
-                    disabled={editingBuiltin}
                     onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                     placeholder="如：SQL 优化专家"
                   />
@@ -258,7 +262,6 @@ export function AgentRoleSettings(): React.ReactElement {
                   <Input
                     id="agent-role-model"
                     value={draft.modelId}
-                    disabled={editingBuiltin}
                     onChange={(event) => setDraft({ ...draft, modelId: event.target.value })}
                     placeholder="留空沿用会话当前模型"
                   />
@@ -270,7 +273,6 @@ export function AgentRoleSettings(): React.ReactElement {
                 <Input
                   id="agent-role-desc"
                   value={draft.description}
-                  disabled={editingBuiltin}
                   onChange={(event) => setDraft({ ...draft, description: event.target.value })}
                   placeholder="一句话说明该角色适合做什么"
                 />
@@ -278,23 +280,16 @@ export function AgentRoleSettings(): React.ReactElement {
 
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="agent-role-prompt">角色提示词</Label>
-                {editingBuiltin ? (
-                  <ScrollArea className="h-32 rounded-md border bg-muted/30 p-3">
-                    <pre className="whitespace-pre-wrap font-sans text-xs text-muted-foreground">{draft.systemPrompt}</pre>
-                  </ScrollArea>
-                ) : (
-                  <Textarea
-                    id="agent-role-prompt"
-                    value={draft.systemPrompt}
-                    onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
-                    placeholder="注入本轮消息的角色提示词：职责、工作方式、边界"
-                    className="min-h-32 text-xs"
-                  />
-                )}
+                <Textarea
+                  id="agent-role-prompt"
+                  value={draft.systemPrompt}
+                  onChange={(event) => setDraft({ ...draft, systemPrompt: event.target.value })}
+                  placeholder="注入本轮消息的角色提示词：职责、工作方式、边界"
+                  className="min-h-32 text-xs"
+                />
               </div>
 
-              {!editingBuiltin && (
-                <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
                     <Label>图标</Label>
                     <div className="flex flex-wrap gap-1">
@@ -317,26 +312,25 @@ export function AgentRoleSettings(): React.ReactElement {
                       })}
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label>标识色</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {COLOR_OPTIONS.map((key) => (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-label={`颜色 ${key}`}
-                          onClick={() => setDraft({ ...draft, color: key })}
-                          className={cn(
-                            'size-6 rounded-full border-2 transition-transform',
-                            COLOR_SWATCH[key],
-                            draft.color === key ? 'border-foreground/60 scale-110' : 'border-transparent',
-                          )}
-                        />
-                      ))}
-                    </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>标识色</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {COLOR_OPTIONS.map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        aria-label={`颜色 ${key}`}
+                        onClick={() => setDraft({ ...draft, color: key })}
+                        className={cn(
+                          'size-6 rounded-full border-2 transition-transform',
+                          COLOR_SWATCH[key],
+                          draft.color === key ? 'border-foreground/60 scale-110' : 'border-transparent',
+                        )}
+                      />
+                    ))}
                   </div>
                 </div>
-              )}
+              </div>
 
               <div className="flex items-center justify-between rounded-md border px-3 py-2">
                 <div className="flex flex-col">
@@ -351,11 +345,24 @@ export function AgentRoleSettings(): React.ReactElement {
 
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">
-                  {editingBuiltin ? '内置角色内容随应用升级更新，仅可调整启用状态' : ''}
+                  {editingBuiltin ? '内置角色：与自定义同等可编辑可删除，可随时重置回源码默认' : ''}
                 </span>
-                <Button type="button" onClick={() => void saveDraft()} disabled={saving}>
-                  {draft.id === '' ? '创建' : editingBuiltin ? '保存启用状态' : '保存'}
-                </Button>
+                <div className="flex gap-2">
+                  {editingBuiltin && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => void resetOneBuiltin()}
+                      className="gap-1.5"
+                    >
+                      <RotateCcw className="size-3.5" />
+                      重置为默认
+                    </Button>
+                  )}
+                  <Button type="button" onClick={() => void saveDraft()} disabled={saving}>
+                    {draft.id === '' ? '创建' : '保存'}
+                  </Button>
+                </div>
               </div>
             </div>
           )}

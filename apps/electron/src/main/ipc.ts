@@ -4295,11 +4295,11 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 重置内置角色为源码默认状态
+  // 重置内置角色为源码默认（指定 roleId 恢复单个；缺省恢复全部）
   ipcMain.handle(
     AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN,
-    async (): Promise<AgentRoleConfig> => {
-      return resetBuiltinAgentRoles()
+    async (_, roleId?: string): Promise<AgentRoleConfig> => {
+      return resetBuiltinAgentRoles(roleId)
     }
   )
 

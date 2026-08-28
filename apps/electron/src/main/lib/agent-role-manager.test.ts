@@ -94,19 +94,22 @@ describe('updateAgentRole', () => {
     expect(updated.disabled).toBe(true)
   })
 
-  test('内置角色仅允许改 disabled，改其他字段静默忽略', () => {
+  test('内置角色同样允许全字段编辑（需求变更：与自定义同等）', () => {
     const updated = manager.updateAgentRole({
       id: 'builtin-research',
-      name: '想改名字',
-      systemPrompt: '想改提示词',
+      name: '高级研究员',
+      systemPrompt: '新提示词',
+      description: '新职责',
+      icon: 'book',
+      color: 'pink',
       disabled: true,
     })
-    expect(updated.name).toBe('研究员')
-    expect(updated.systemPrompt).toContain('研究')
-    expect(updated.disabled).toBe(true)
+    expect(updated.name).toBe('高级研究员')
+    expect(updated.systemPrompt).toBe('新提示词')
+    expect(updated.builtin).toBe(true)
 
-    // 恢复，避免影响后续用例
-    manager.updateAgentRole({ id: 'builtin-research', disabled: false })
+    // 重置回默认
+    manager.resetBuiltinAgentRoles('builtin-research')
   })
 
   test('角色不存在时抛错', () => {
@@ -115,18 +118,44 @@ describe('updateAgentRole', () => {
 })
 
 describe('deleteAgentRole / resetBuiltinAgentRoles', () => {
-  test('自定义角色可删除；内置角色不可删除', () => {
+  test('自定义角色可删除，删除后不再出现', () => {
     const role = manager.createAgentRole({ name: '待删', systemPrompt: 'x' })
     expect(() => manager.deleteAgentRole(role.id)).not.toThrow()
-    expect(() => manager.deleteAgentRole('builtin-research')).toThrow('内置角色不可删除')
+    expect(manager.getAgentRoleConfig().roles.find((item) => item.id === role.id)).toBeUndefined()
   })
 
-  test('重置内置角色清除 disabled，自定义角色不受影响', () => {
-    manager.updateAgentRole({ id: 'builtin-explore', disabled: true })
+  test('内置角色可删除且不复活；单角色重置可找回', () => {
+    manager.deleteAgentRole('builtin-research')
+    const afterDelete = manager.getAgentRoleConfig()
+    expect(afterDelete.roles.find((item) => item.id === 'builtin-research')).toBeUndefined()
+    expect(afterDelete.deletedBuiltinRoleIds).toContain('builtin-research')
+
+    // 重启模拟：重新读盘后仍不复活
+    expect(manager.getAgentRoleConfig().roles.find((item) => item.id === 'builtin-research')).toBeUndefined()
+
+    // 单角色重置找回，恢复源码默认
+    const afterReset = manager.resetBuiltinAgentRoles('builtin-research')
+    const restored = afterReset.roles.find((item) => item.id === 'builtin-research')
+    expect(restored?.name).toBe('研究员')
+    expect(afterReset.deletedBuiltinRoleIds ?? []).not.toContain('builtin-research')
+  })
+
+  test('全量重置恢复全部内置且保留自定义与用户删除记录清空', () => {
     const custom = manager.createAgentRole({ name: '保持不变', systemPrompt: 'x' })
+    manager.deleteAgentRole('builtin-explore')
+    const beforeCustomCount = manager.getAgentRoleConfig().roles.filter((item) => !item.builtin).length
     const config = manager.resetBuiltinAgentRoles()
-    expect(config.roles.find((item) => item.id === 'builtin-explore')?.disabled).toBeUndefined()
+    expect(config.roles.find((item) => item.id === 'builtin-explore')?.name).toBe('探索者')
     expect(config.roles.find((item) => item.id === custom.id)?.name).toBe('保持不变')
+    // 全部内置恢复 + 自定义数量不变（含本用例新建）
+    expect(config.roles.filter((item) => item.builtin)).toHaveLength(8)
+    expect(config.roles.filter((item) => !item.builtin)).toHaveLength(beforeCustomCount)
+    expect(config.deletedBuiltinRoleIds ?? []).toEqual([])
+  })
+
+  test('重置不存在的内置角色 id 抛错', () => {
+    expect(() => manager.resetBuiltinAgentRoles('no-such-builtin')).toThrow()
+    expect(() => manager.resetBuiltinAgentRoles('custom-not-builtin')).toThrow()
   })
 })
 
@@ -154,9 +183,13 @@ describe('buildAgentRolePromptSection', () => {
 })
 
 describe('getAgentRoleConfig / resolveExecutableAgentRole', () => {
-  test('配置不存在时返回仅内置角色的安全默认', () => {
+  test('配置不存在时返回全部内置角色的安全默认', () => {
     const config = manager.getAgentRoleConfig()
     expect(config.roles.filter((role) => role.builtin).map((role) => role.id)).toEqual([
+      'builtin-product-manager',
+      'builtin-frontend-engineer',
+      'builtin-backend-engineer',
+      'builtin-test-engineer',
       'builtin-research',
       'builtin-explore',
       'builtin-implement',

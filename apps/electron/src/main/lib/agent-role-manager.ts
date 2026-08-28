@@ -4,16 +4,15 @@
  * 管理 Agent 会话的角色 CRUD 与持久化。
  * 存储在 ~/.proma/agent-roles.json（safe-file 原子写）。
  *
- * 与系统提示词预设（system-prompt-manager）的差异：
- * - 写入统一走 writeJsonFileAtomic 原子写；
- * - 内置角色内容永远以 shared 源码为准（mergeAgentRoleConfig），
- *   磁盘仅持久化自定义角色、内置角色的 disabled 状态与默认角色 ID。
+ * 内置角色与自定义角色同等可编辑可删除（2026-08-28 需求变更）；
+ * 唯一差异：内置角色可「重置」回源码默认（单个或全部）。
+ * 用户删除的内置角色 id 记录在 deletedBuiltinRoleIds，重启不复活。
  */
 
 import { randomUUID } from 'node:crypto'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 import { getAgentRolesPath } from './config-paths'
-import { mergeAgentRoleConfig } from '@proma/shared'
+import { BUILTIN_AGENT_ROLES, mergeAgentRoleConfig } from '@proma/shared'
 import type {
   AgentRole,
   AgentRoleConfig,
@@ -62,17 +61,11 @@ export function createAgentRole(input: AgentRoleCreateInput): AgentRole {
   return role
 }
 
-/** 更新角色（内置角色仅允许 disabled；modelId 传 null 表示清除） */
+/** 更新角色（内置与自定义同等，均允许全字段；modelId 传 null 表示清除） */
 export function updateAgentRole(input: AgentRoleUpdateInput): AgentRole {
   const config = getAgentRoleConfig()
   const role = config.roles.find((item) => item.id === input.id)
   if (!role) throw new Error(`角色不存在: ${input.id}`)
-
-  if (role.builtin) {
-    if (input.disabled !== undefined) role.disabled = input.disabled || undefined
-    persist(config)
-    return role
-  }
 
   if (input.name !== undefined) {
     const name = input.name.trim()
@@ -103,28 +96,71 @@ export function updateAgentRole(input: AgentRoleUpdateInput): AgentRole {
   return role
 }
 
-/** 删除自定义角色（内置角色不可删除；默认角色被删时清空 defaultRoleId） */
+/**
+ * 删除角色（内置与自定义均可删）。
+ * 删除内置角色时记录到 deletedBuiltinRoleIds，重启后不被源码复活；
+ * 重置内置角色可找回。默认角色被删时清空 defaultRoleId。
+ */
 export function deleteAgentRole(roleId: string): void {
   const config = getAgentRoleConfig()
   const index = config.roles.findIndex((item) => item.id === roleId)
   const target = index !== -1 ? config.roles[index] : undefined
   if (!target) throw new Error(`角色不存在: ${roleId}`)
-  if (target.builtin) throw new Error('内置角色不可删除')
 
   config.roles.splice(index, 1)
+  if (target.builtin) {
+    config.deletedBuiltinRoleIds = [
+      ...(config.deletedBuiltinRoleIds ?? []).filter((id) => id !== roleId),
+      roleId,
+    ]
+  }
   if (config.defaultRoleId === roleId) delete config.defaultRoleId
   persist(config)
 }
 
-/** 重置全部内置角色为源码默认状态（清除 disabled；自定义角色不受影响） */
-export function resetBuiltinAgentRoles(): AgentRoleConfig {
+/**
+ * 重置内置角色为源码默认。
+ * - 指定 roleId：恢复单个内置角色（清除用户修改，并从删除记录中找回）；
+ * - 未指定：恢复全部内置角色（自定义角色不受影响）。
+ */
+export function resetBuiltinAgentRoles(roleId?: string): AgentRoleConfig {
   const config = getAgentRoleConfig()
-  const nextRoles: AgentRole[] = config.roles.map((role) =>
-    role.builtin ? { ...role, disabled: undefined } : role,
-  )
-  const next: AgentRoleConfig = { roles: nextRoles, ...(config.defaultRoleId ? { defaultRoleId: config.defaultRoleId } : {}) }
-  persist(next)
-  return next
+  const builtinById = new Map(BUILTIN_AGENT_ROLES.map((role) => [role.id, role]))
+
+  if (roleId) {
+    const source = builtinById.get(roleId)
+    if (!source) throw new Error(`内置角色不存在: ${roleId}`)
+    // 恢复源码版本（保留 id 语义），从删除记录中移除
+    const rest = config.roles.filter((item) => item.id !== roleId)
+    const sourceIndex = BUILTIN_AGENT_ROLES.findIndex((role) => role.id === roleId)
+    const insertBefore = rest.findIndex(
+      (item) => item.builtin && BUILTIN_AGENT_ROLES.findIndex((role) => role.id === item.id) > sourceIndex,
+    )
+    const resetRole: AgentRole = { ...source, updatedAt: Date.now() }
+    if (insertBefore === -1) {
+      rest.push(resetRole)
+    } else {
+      rest.splice(insertBefore, 0, resetRole)
+    }
+    return persistAndReturn({
+      roles: rest,
+      ...(config.defaultRoleId ? { defaultRoleId: config.defaultRoleId } : {}),
+      deletedBuiltinRoleIds: (config.deletedBuiltinRoleIds ?? []).filter((id) => id !== roleId),
+    })
+  }
+
+  // 全量重置：自定义角色保留，内置全部恢复源码版本，清空删除记录
+  const customRoles = config.roles.filter((item) => !item.builtin)
+  return persistAndReturn({
+    roles: [...BUILTIN_AGENT_ROLES.map((role) => ({ ...role })), ...customRoles],
+    ...(config.defaultRoleId ? { defaultRoleId: config.defaultRoleId } : {}),
+  })
+}
+
+/** 持久化并返回合并后的配置（读回以确保与 merge 语义一致） */
+function persistAndReturn(config: AgentRoleConfig): AgentRoleConfig {
+  persist(config)
+  return getAgentRoleConfig()
 }
 
 /**

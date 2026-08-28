@@ -8,7 +8,8 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Search, Compass, Code2, ShieldCheck, Bot, BookOpen, Wrench, Sparkles, User,
+  Search, Compass, Code2, ShieldCheck, ClipboardList, Layout, Server, Bug,
+  Bot, BookOpen, Wrench, Sparkles, User,
 } from 'lucide-react'
 import type { AgentRoleIcon } from '@proma/shared'
 import { agentRoleConfigAtom } from '@/atoms/agent-role-atoms'
@@ -20,6 +21,10 @@ export const AGENT_ROLE_ICON_MAP: Record<AgentRoleIcon, React.ComponentType<{ cl
   compass: Compass,
   code: Code2,
   'shield-check': ShieldCheck,
+  'clipboard-list': ClipboardList,
+  layout: Layout,
+  server: Server,
+  bug: Bug,
   bot: Bot,
   book: BookOpen,
   wrench: Wrench,

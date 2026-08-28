@@ -1012,8 +1012,8 @@ export interface ElectronAPI {
   /** 删除自定义角色 */
   deleteAgentRole: (roleId: string) => Promise<void>
 
-  /** 重置内置角色为源码默认状态 */
-  resetBuiltinAgentRoles: () => Promise<AgentRoleConfig>
+  /** 重置内置角色为源码默认（指定 roleId 恢复单个；缺省恢复全部） */
+  resetBuiltinAgentRoles: (roleId?: string) => Promise<AgentRoleConfig>
 
   /** 设置默认提示词 */
   setDefaultPrompt: (id: string | null) => Promise<void>
@@ -2491,8 +2491,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.DELETE, roleId)
   },
 
-  resetBuiltinAgentRoles: () => {
-    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN)
+  resetBuiltinAgentRoles: (roleId?: string) => {
+    return ipcRenderer.invoke(AGENT_ROLE_IPC_CHANNELS.RESET_BUILTIN, roleId)
   },
 
   setDefaultPrompt: (id: string | null) => {
