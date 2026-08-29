@@ -1,0 +1,142 @@
+# GitHub Actions: my-proma 分支持续集成
+#
+# 触发条件：
+# - push 到 my-proma 分支
+# - 针对 my-proma 分支的 pull_request
+# - 手动触发（workflow_dispatch，可选是否包含 mac x64 打包）
+#
+# 流程：
+# 1. test job（ubuntu）：typecheck + 单元测试
+# 2. package job（windows x64 / macos arm64，可选 macos x64）：
+#    构建 Electron 应用并打包，产物以 artifact 形式上传，不发布 Release。
+#
+# 注意：electron-builder.yml 的 publish 指向上游仓库 proma-ai/Proma，
+# 且 electron-builder 在 CI 环境存在"隐式发布到 draft release"的废弃行为，
+# 因此打包命令显式传 --publish never；产物经 upload-artifact 分发。
+#
+# 所需 Secrets：无（artifact 上传使用隐式 GITHUB_TOKEN 即可）
+
+name: CI
+
+on:
+  push:
+    branches:
+      - my-proma
+  pull_request:
+    branches:
+      - my-proma
+  workflow_dispatch:
+    inputs:
+      include_mac_x64:
+        description: '同时打包 macOS x64'
+        type: boolean
+        default: false
+
+# 同分支新推送取消仍在进行的旧运行，节省 runner 时间
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: typecheck & test (ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      - name: 类型检查
+        run: bun run typecheck
+
+      - name: 运行测试
+        run: bun test
+
+  package:
+    name: package (${{ matrix.name }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-latest, win, x64
+            os: windows-latest
+            builder_args: '--win --x64'
+          - name: macos-latest, mac, arm64
+            os: macos-latest
+            builder_args: '--mac --arm64'
+          - name: macos-15-intel, mac, x64
+            os: macos-15-intel
+            builder_args: '--mac --x64'
+            manual_only: true
+
+    # 默认平台在 push/PR/手动触发时都构建；mac x64 仅手动勾选时构建
+    if: ${{ !matrix.manual_only || (github.event_name == 'workflow_dispatch' && inputs.include_mac_x64) }}
+
+    # 步骤默认工作目录：apps/electron
+    defaults:
+      run:
+        working-directory: apps/electron
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+        working-directory: .
+
+      # 等价于 dist 脚本的前置步骤（prepare:officecli 已包含在 build 内）
+      - name: 构建 Electron 应用
+        run: bun run build
+
+      - name: 同步运行时依赖
+        run: bun run sync:runtime-deps
+
+      - name: 重建 node-pty（匹配 Electron ABI）
+        run: bun run rebuild:node-pty
+
+      # 显式 --publish never：fork 对 electron-builder.yml 中配置的上游仓库
+      # 无发布权限，同时规避 CI 环境下隐式发布到 draft release 的废弃行为
+      - name: 打包安装程序（不发布）
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+
+      - name: 上传安装包 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proma-${{ matrix.os }}-${{ github.run_number }}
+          path: |
+            apps/electron/out/*.exe
+            apps/electron/out/*.dmg
+            apps/electron/out/*.zip
+            apps/electron/out/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
