@@ -1,13 +1,15 @@
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 const managerModulePath = join(import.meta.dir, 'planning-manager.ts')
 const repoRoot = dirname(dirname(dirname(dirname(dirname(import.meta.dir)))))
-const electronBinary = createRequire(import.meta.url)('electron') as string
+// 注意：不能通过 require('electron') 拿二进制路径——其他测试文件的 mock.module('electron')
+// 会污染模块缓存，使它返回 mock 对象而非路径字符串；这里直接读 electron 包的
+// path.txt 拼出 dist 内的可执行文件，跨平台且不受 mock 影响。
+const electronBinary = join(repoRoot, 'node_modules', 'electron', 'dist', readFileSync(join(repoRoot, 'node_modules', 'electron', 'path.txt'), 'utf8').trim())
 
 /**
  * planning-manager 的数据库连接是模块级单例，而 node:sqlite 仅由 Electron 的 Node 22 提供。
@@ -113,7 +115,10 @@ test('Given a fresh planning database When planning data changes Then isolation,
 
     const result = spawnSync(electronBinary, [outputPath], {
       cwd: repoRoot,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, PROMA_DEV: '1' },
+      // Windows 下 node:os 的 homedir() 读 USERPROFILE 而非 HOME，必须同时覆盖，
+      // 否则被测代码（config-paths 走 homedir）与 verify 脚本（读 HOME）会
+      // 各自打开不同的 planning.db，全新库隔离失效
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, USERPROFILE: home, PROMA_DEV: '1' },
       encoding: 'utf8',
     })
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)

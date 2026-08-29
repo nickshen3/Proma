@@ -42,8 +42,11 @@ permissions:
 
 jobs:
   test:
-    name: typecheck & test (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: typecheck & test (windows-latest)
+    # 跑在 Windows 上：bun 1.4 在 Linux 下 mock.module('electron') 无法拦截 ESM
+    # 链接（agent-session-manager 等测试报 Export named 'dialog' not found）；
+    # Windows 下 mock 生效，且全新 runner 环境没有本机 .proma-dev 数据污染
+    runs-on: windows-latest
 
     steps:
       - name: 检出代码
