@@ -50,7 +50,7 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, type PiRewindAnchor, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, type PiRewindAnchor, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, rehydratePiArtifactForSession } from './agent-session-manager'
 import { resolveExecutableAgentRole, buildAgentRolePromptSection } from './agent-role-manager'
 import { getAgentWorkspace, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getMcpOAuthHeaders } from './mcp-oauth-service'
@@ -954,8 +954,20 @@ export class AgentOrchestrator {
       windowsShellPreference: appSettings.windowsShellPreference,
     })
 
-    // 4. 读取已有的 SDK session ID（用于 resume）
+    // 4. 读取已有的 SDK session ID（用于 resume）；无 artifact 但 JSONL 有历史时先懒重建，
+    //    恢复完整 resume（移动工作区/撤回重置后的会话）；重建失败降级为摘要注入。
     let existingSdkSessionId = sessionMeta?.sdkSessionId
+    if (!existingSdkSessionId && sessionMeta && !sessionMeta.legacyTranscript) {
+      try {
+        const rehydrated = await rehydratePiArtifactForSession(sessionId)
+        if (rehydrated) {
+          existingSdkSessionId = rehydrated.sdkSessionId
+          console.log(`[Agent 编排] 已从 JSONL 重建 Pi artifact（${rehydrated.rebuiltCount} 条），恢复完整 resume`)
+        }
+      } catch (rehydrateError) {
+        console.warn('[Agent 编排] Pi artifact 重建失败，降级为历史摘要注入:', rehydrateError)
+      }
+    }
 
     console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
 
@@ -2286,12 +2298,15 @@ export class AgentOrchestrator {
     }
 
     const sessionMeta = getAgentSessionMeta(sessionId)
-    if (sessionMeta?.legacyTranscript?.continuationRequired) {
+    if (!sessionMeta) {
+      throw new Error('Agent 会话不存在')
+    }
+    if (sessionMeta.legacyTranscript?.continuationRequired) {
       throw new Error('这是已退役 Claude runtime 的只读历史会话，不能回退；请以 Pi 新会话继续。')
     }
-    if (!sessionMeta?.sdkSessionId) {
-      throw new Error('会话没有 Pi session ID，无法回退')
-    }
+    // 不前置拦截 sdkSessionId：会话移动工作区或撤回首条消息后会合法清空 Pi metadata，
+    // 等待下次发送懒重建。是否可回退由 rewindPiAgentSession 按“保留集是否需要
+    // Pi artifact 锚点”判断，避免把合法状态误报为不可回退。
     if (input.assistantMessageUuid && input.beforeUserMessageUuid) {
       throw new Error('回退参数冲突：assistantMessageUuid 与 beforeUserMessageUuid 只能二选一')
     }

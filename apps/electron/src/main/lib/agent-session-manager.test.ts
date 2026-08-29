@@ -16,6 +16,16 @@ const originalPromaDev = process.env.PROMA_DEV
 // entry-tree semantics without requiring a real Pi session JSONL fixture.
 mock.module('@earendil-works/pi-coding-agent', () => ({
   SessionManager: {
+    create: (_cwd: string, _sessionsDir: string) => {
+      let counter = 0
+      const sessionFile = join(tempHome, `.pi-rebuilt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`)
+      writeFileSync(sessionFile, '', 'utf-8')
+      return {
+        appendMessage: () => `entry-rebuilt-${++counter}`,
+        getSessionFile: () => sessionFile,
+        getSessionId: () => 'pi-rebuilt-session',
+      }
+    },
     open: (sessionFile: string) => ({
       createBranchedSession: (entryId: string) => {
         const branchFile = join(tempHome, `.pi-branch-${entryId}.jsonl`)
@@ -611,6 +621,108 @@ describe('Pi entry binding recovery', () => {
     expect(metaAfter?.piSessionFile).toBeUndefined()
     expect(metaAfter?.piEntryBindings).toEqual({})
     expect(manager.getAgentSessionSDKMessages('pi-withdraw-first')).toEqual([])
+  })
+
+  test('Given 会话 Pi metadata 已合法清空（如移动工作区后）When 撤回首条用户消息 Then 无需 artifact 也能清空成功', async () => {
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-moved', title: 'Moved session', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: undefined, piSessionFile: undefined, piEntryBindings: undefined,
+    }])
+    writeAgentSessionJsonl('pi-withdraw-moved', [
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-stale', message: { content: [{ type: 'text', text: '丢弃' }] } }),
+    ])
+
+    const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-moved', { kind: 'before-user-message', userMessageUuid: 'user-target' })
+
+    expect(retainedCount).toBe(0)
+    const metaAfter = manager.getAgentSessionMeta('pi-withdraw-moved')
+    expect(metaAfter?.sdkSessionId).toBeUndefined()
+    expect(metaAfter?.piSessionFile).toBeUndefined()
+    expect(metaAfter?.piEntryBindings).toEqual({})
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-moved')).toEqual([])
+  })
+
+  test('Given 会话缺少 Pi artifact When 撤回非首条消息 Then 从保留集重建而非报错（见下方重建用例）', async () => {
+    // 行为已被「从保留集重建」用例覆盖；此用例保留验证失败回滚路径：
+    // 撤回目标不存在时 JSONL 保持原状。
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-no-artifact', title: 'No artifact', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: undefined, piSessionFile: undefined, piEntryBindings: undefined,
+    }])
+    writeAgentSessionJsonl('pi-withdraw-no-artifact', [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] } }),
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] } }),
+    ])
+
+    await expect(manager.rewindPiAgentSession('pi-withdraw-no-artifact', { kind: 'before-user-message', userMessageUuid: 'not-exist' }))
+      .rejects.toThrow('未找到用户消息 uuid=not-exist')
+    // 失败时 JSONL 保持原状，不产生半截截断
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-no-artifact').map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['user-1', 'user-target'])
+  })
+
+  test('Given 无 Pi artifact 的会话（移动工作区后）When 撤回非首条消息 Then 从保留集重建 artifact 并恢复撤回能力', async () => {
+    writeAgentSessionsIndex([{
+      id: 'pi-withdraw-rebuild', title: 'Rebuild on withdraw', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: undefined, piSessionFile: undefined, piEntryBindings: undefined,
+    }])
+    writeAgentSessionJsonl('pi-withdraw-rebuild', [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] }, _createdAt: 1000 }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-keep', message: { content: [{ type: 'text', text: '保留' }], usage: { input_tokens: 10, output_tokens: 5 }, model: 'glm-5.3', stop_reason: 'stop' }, _channelProvider: 'zhipu-coding', _createdAt: 2000 }),
+      JSON.stringify({ type: 'user', uuid: 'user-target', message: { content: [{ type: 'text', text: '误发送' }] }, _createdAt: 3000 }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-stale', message: { content: [{ type: 'text', text: '丢弃' }], usage: { input_tokens: 10, output_tokens: 5 }, model: 'glm-5.3', stop_reason: 'stop' }, _createdAt: 4000 }),
+    ])
+
+    const retainedCount = await manager.rewindPiAgentSession('pi-withdraw-rebuild', { kind: 'before-user-message', userMessageUuid: 'user-target' })
+
+    expect(retainedCount).toBe(2)
+    const metaAfter = manager.getAgentSessionMeta('pi-withdraw-rebuild')
+    expect(metaAfter?.sdkSessionId).toBe('pi-rebuilt-session')
+    expect(metaAfter?.piSessionFile && existsSync(metaAfter.piSessionFile)).toBe(true)
+    // 保留集中的 assistant 重建后获得 entry 绑定；被撤回的不应出现
+    expect(metaAfter?.piEntryBindings).toEqual({ 'assistant-keep': 'entry-rebuilt-2' })
+    expect(manager.getAgentSessionSDKMessages('pi-withdraw-rebuild').map((message) => (message as { uuid?: string }).uuid))
+      .toEqual(['user-1', 'assistant-keep'])
+  })
+
+  test('Given 已有 artifact When 发送前懒重建 Then 幂等跳过不重建', async () => {
+    const piSessionFile = join(tempHome, '.pi-existing.jsonl')
+    writeFileSync(piSessionFile, '', 'utf-8')
+    writeAgentSessionsIndex([{
+      id: 'pi-rehydrate-skip', title: 'Skip rehydrate', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: 'pi-existing-session', piSessionFile,
+      piEntryBindings: {},
+    }])
+    writeAgentSessionJsonl('pi-rehydrate-skip', [
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] } }),
+    ])
+
+    const outcome = await manager.rehydratePiArtifactForSession('pi-rehydrate-skip')
+
+    expect(outcome).toBeUndefined()
+    expect(manager.getAgentSessionMeta('pi-rehydrate-skip')?.sdkSessionId).toBe('pi-existing-session')
+  })
+
+  test('Given 无 artifact 且 JSONL 有历史 When 发送前懒重建 Then 恢复 sdkSessionId 与 bindings', async () => {
+    writeAgentSessionsIndex([{
+      id: 'pi-rehydrate-run', title: 'Run rehydrate', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1,
+      agentRuntime: 'pi', sdkSessionId: undefined, piSessionFile: undefined, piEntryBindings: undefined,
+    }])
+    writeAgentSessionJsonl('pi-rehydrate-run', [
+      JSON.stringify({ type: 'system', subtype: 'status', _createdAt: 500 }),
+      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '开始' }] }, _createdAt: 1000 }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: '回复' }], usage: { input_tokens: 10, output_tokens: 5 }, model: 'glm-5.3', stop_reason: 'stop' }, _channelProvider: 'zhipu-coding', _createdAt: 2000 }),
+    ])
+
+    const outcome = await manager.rehydratePiArtifactForSession('pi-rehydrate-run')
+
+    expect(outcome?.rebuiltCount).toBe(2)
+    expect(outcome?.sdkSessionId).toBe('pi-rebuilt-session')
+    const metaAfter = manager.getAgentSessionMeta('pi-rehydrate-run')
+    expect(metaAfter?.sdkSessionId).toBe('pi-rebuilt-session')
+    expect(metaAfter?.piSessionFile && existsSync(metaAfter.piSessionFile)).toBe(true)
+    expect(metaAfter?.piEntryBindings).toEqual({ 'assistant-1': 'entry-rebuilt-2' })
   })
 
   test('Given 保留集末尾是队列中的用户消息 When rewinding with before-user-message Then 从 Pi artifact 反查该消息 entry 锚点', async () => {

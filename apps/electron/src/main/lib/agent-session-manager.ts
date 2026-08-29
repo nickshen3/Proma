@@ -51,6 +51,8 @@ import { convertLegacyMessage } from '@proma/session-core'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
+import { rehydratePiArtifactFromMessages } from './agent-session-pi-rehydrate'
+import type { PiRehydrateOutcome } from './agent-session-pi-rehydrate'
 
 /**
  * 会话索引文件格式
@@ -582,6 +584,42 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
 }
 
 /**
+ * 发送前懒重建 Pi artifact。
+ *
+ * 会话移动工作区或撤回重置后 Pi metadata 被合法清空但 JSONL 历史仍在：
+ * 从 JSONL 重建对话树并提交 metadata，把「最近 20 条摘要注入」升级为完整 resume。
+ * 已有 artifact、无可重建对话或 legacy 会话时跳过（返回 undefined）；
+ * 重建失败由调用方降级，不影响发送主流程。
+ */
+export async function rehydratePiArtifactForSession(sessionId: string): Promise<PiRehydrateOutcome | undefined> {
+  const meta = getAgentSessionMeta(sessionId)
+  if (!meta || meta.legacyTranscript) return undefined
+  if (meta.piSessionFile && existsSync(meta.piSessionFile)) return undefined
+
+  const conversationRows = getAgentSessionSDKMessages(sessionId)
+    .filter((row) => {
+      const candidate = row as { type?: unknown }
+      return candidate.type === 'user' || candidate.type === 'assistant'
+    }) as unknown as Record<string, unknown>[]
+  if (conversationRows.length === 0) return undefined
+
+  const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  const cwd = resolveAgentCwd(workspace, meta.id, meta.agentCwdMode, meta.activeWorktree) ?? process.cwd()
+  const outcome = await rehydratePiArtifactFromMessages({
+    messages: conversationRows,
+    cwd,
+    sessionsDir: join(getSdkConfigDir(), 'sessions'),
+  })
+  updateAgentSessionMeta(sessionId, {
+    sdkSessionId: outcome.sdkSessionId,
+    piSessionFile: outcome.sessionFile,
+    piEntryBindings: outcome.piEntryBindings,
+  })
+  console.log(`[Agent 会话] 已从 JSONL 重建 Pi artifact: sessionId=${sessionId}, ${outcome.rebuiltCount} 条`)
+  return outcome
+}
+
+/**
  * convertLegacyMessage 已迁移至 @proma/session-core（本文件从该包 import 使用）。
  */
 
@@ -964,7 +1002,6 @@ export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAn
   const meta = getAgentSessionMeta(sessionId)
   if (!meta) throw new Error('Agent 会话不存在')
   if (meta.legacyTranscript) throw new Error('历史 Claude transcript 为只读，不能回退；请新建 Pi 会话继续')
-  if (!meta.piSessionFile || !existsSync(meta.piSessionFile)) throw new Error('未找到 Pi session artifact，无法安全回退')
 
   const filePath = getAgentSessionMessagesPath(sessionId)
   if (!existsSync(filePath)) throw new Error(`[Agent 会话] 截断失败: 会话消息文件不存在, sessionId=${sessionId}`)
@@ -991,14 +1028,15 @@ export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAn
   // Pi branch 锚点必须精确等于保留集末尾：超前的锚点会连带删掉需要保留的消息。
   // 注意 session header 不是树 entry（root 是首个 parentId=null 的 entry），不能作为锚点。
   const lastKeptUuid = [...kept].reverse().find((message) => messageUuid(message) !== undefined)
+  const hasArtifact = !!meta.piSessionFile && existsSync(meta.piSessionFile)
   let branchAnchorEntryId: string | undefined
-  if (lastKeptUuid) {
+  if (lastKeptUuid && hasArtifact) {
     const lastKeptMessageUuid = messageUuid(lastKeptUuid)!
     branchAnchorEntryId = meta.piEntryBindings?.[lastKeptMessageUuid]
-      ?? findPiEntryIdByMessageUuid(meta.piSessionFile, lastKeptMessageUuid)
-  }
-  if (lastKeptUuid && !branchAnchorEntryId) {
-    throw new Error('该消息之前的历史尚无 Pi entry 映射，无法安全撤回')
+      ?? findPiEntryIdByMessageUuid(meta.piSessionFile!, lastKeptMessageUuid)
+    if (!branchAnchorEntryId) {
+      throw new Error('该消息之前的历史尚无 Pi entry 映射，无法安全撤回')
+    }
   }
 
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
@@ -1006,7 +1044,7 @@ export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAn
 
   writeTextFileAtomic(filePath, truncatedContent)
   try {
-    if (lastKeptUuid && branchAnchorEntryId) {
+    if (lastKeptUuid && branchAnchorEntryId && meta.piSessionFile) {
       const sdk = await import('@earendil-works/pi-coding-agent')
       const manager = sdk.SessionManager.open(meta.piSessionFile, join(getSdkConfigDir(), 'sessions'), cwd)
       const branchFile = manager.createBranchedSession(branchAnchorEntryId)
@@ -1027,6 +1065,20 @@ export async function rewindPiAgentSession(sessionId: string, anchor: PiRewindAn
         piSessionFile: branchFile,
         piEntryBindings: retainedBindings,
       })
+    } else if (lastKeptUuid && !hasArtifact) {
+      // 无 artifact（会话移动过工作区等）：从保留集重建一棵全新对话树。
+      // 重建树天然锚定在保留集末尾，恢复 resume 与后续撤回能力。
+      const outcome = await rehydratePiArtifactFromMessages({
+        messages: kept as Record<string, unknown>[],
+        cwd,
+        sessionsDir: join(getSdkConfigDir(), 'sessions'),
+      })
+      updateAgentSessionMeta(sessionId, {
+        sdkSessionId: outcome.sdkSessionId,
+        piSessionFile: outcome.sessionFile,
+        piEntryBindings: outcome.piEntryBindings,
+      })
+      console.log(`[Agent 会话] 撤回时已从保留集重建 Pi artifact: sessionId=${sessionId}, ${outcome.rebuiltCount} 条`)
     } else {
       // 保留集为空（撤回会话首条消息）：Pi 懒落盘策略下尚无可锚定的 entry，
       // 清空 Pi metadata 让下次发送全新创建。
