@@ -83,13 +83,6 @@ jobs:
           - name: macos-latest, mac, arm64
             os: macos-latest
             builder_args: '--mac --arm64'
-          - name: macos-15-intel, mac, x64
-            os: macos-15-intel
-            builder_args: '--mac --x64'
-            manual_only: true
-
-    # 默认平台在 push/PR/手动触发时都构建；mac x64 仅手动勾选时构建
-    if: ${{ !matrix.manual_only || (github.event_name == 'workflow_dispatch' && inputs.include_mac_x64) }}
 
     # 步骤默认工作目录：apps/electron
     defaults:
@@ -138,5 +131,59 @@ jobs:
             apps/electron/out/*.dmg
             apps/electron/out/*.zip
             apps/electron/out/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  # macOS x64 仅在手动触发并勾选时构建（job 级 if 不允许引用 matrix 上下文）
+  package-mac-x64:
+    name: package (macos-15-intel, mac, x64)
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.include_mac_x64
+    runs-on: macos-15-intel
+
+    defaults:
+      run:
+        working-directory: apps/electron
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+        working-directory: .
+
+      - name: 构建 Electron 应用
+        run: bun run build
+
+      - name: 同步运行时依赖
+        run: bun run sync:runtime-deps
+
+      - name: 重建 node-pty（匹配 Electron ABI）
+        run: bun run rebuild:node-pty
+
+      # 显式 --publish never：fork 对 electron-builder.yml 中配置的上游仓库
+      # 无发布权限，同时规避 CI 环境下隐式发布到 draft release 的废弃行为
+      - name: 打包安装程序（不发布）
+        run: npx electron-builder --mac --x64 --publish never
+
+      - name: 上传安装包 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proma-macos-15-intel-${{ github.run_number }}
+          path: |
+            apps/electron/out/*.dmg
+            apps/electron/out/*.zip
+            apps/electron/out/latest-mac.yml
           if-no-files-found: error
           retention-days: 14
