@@ -4,6 +4,8 @@ import { Terminal } from '@xterm/xterm'
 import type { TerminalOutputEvent } from '@proma/shared'
 import '@xterm/xterm/css/xterm.css'
 import { detectIsWindows } from '@/lib/platform'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { resolveTerminalCopyPasteAction } from '@/lib/terminal-copy-keys'
 
 export interface TerminalTabContentProps {
   terminalId: string
@@ -47,6 +49,33 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(host)
+
+    // 智能复制/粘贴：有选区时 Ctrl+C 复制而非发送 ^C；Ctrl+Shift+C/V 为显式兜底。
+    // 判定规则见 terminal-copy-keys；粘贴用 terminal.paste 复用 xterm 原生语义
+    // （bracketed paste、换行规范化），经 onData 现有链路写入 PTY。
+    terminal.attachCustomKeyEventHandler((event) => {
+      const action = resolveTerminalCopyPasteAction(event, terminal.hasSelection())
+      if (!action) return true
+      if (action === 'copy') {
+        const selection = terminal.getSelection()
+        if (selection) {
+          void copyTextToClipboard(selection).catch((error) => {
+            console.error('[终端] 复制到剪贴板失败:', error)
+          })
+          terminal.clearSelection()
+        }
+        return false
+      }
+      void window.electronAPI.readClipboardText()
+        .then((text) => {
+          if (text) terminal.paste(text)
+        })
+        .catch((error) => {
+          console.error('[终端] 读取剪贴板失败:', error)
+        })
+      return false
+    })
+
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
     let ptyCreated = false

@@ -296,6 +296,8 @@ export interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   /** 在系统剪贴板中写入纯文本 */
   writeClipboardText: (text: string) => Promise<void>
+  /** 读取系统剪贴板纯文本 */
+  readClipboardText: () => Promise<string>
 
   // ===== 窗口控制（Windows 自定义标题栏）=====
 
@@ -1523,6 +1525,10 @@ const electronAPI: ElectronAPI = {
 
   writeClipboardText: (text: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.WRITE_CLIPBOARD_TEXT, text)
+  },
+
+  readClipboardText: () => {
+    return ipcRenderer.invoke(IPC_CHANNELS.READ_CLIPBOARD_TEXT)
   },
 
   // 窗口控制
