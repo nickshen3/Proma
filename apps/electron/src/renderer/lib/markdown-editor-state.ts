@@ -115,6 +115,17 @@ export function canPersistMarkdownEditorState(isEditableText: boolean | undefine
   return Boolean(isEditableText) && !readOnly
 }
 
+/**
+ * 判断当前滚动容器是否处于可持久化状态。
+ *
+ * loading 占位或旧内容卸载时容器 scrollHeight 会收缩到视口以内，浏览器会把
+ * scrollTop clamp 到 0 并派发 scroll 事件；若照常写入会把已保存的查看位置
+ * 覆盖为顶部。容器不可滚动（含仅差 1px 的舍入误差）时一律跳过写入。
+ */
+export function shouldPersistScrollPosition(scrollHeight: number, clientHeight: number): boolean {
+  return scrollHeight > clientHeight + 1
+}
+
 function getCacheKey(sessionId: string, filePath: string): string {
   return `${sessionId}\u001f${filePath}`
 }

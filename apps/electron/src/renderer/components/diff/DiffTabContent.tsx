@@ -56,6 +56,7 @@ import {
   isMarkdownEditorOwnerCurrent,
   canPersistMarkdownEditorState,
   setMarkdownEditorViewState,
+  shouldPersistScrollPosition,
   type MarkdownEditorOwner,
   type MarkdownEditorViewState,
   type MarkdownScrollPosition,
@@ -641,6 +642,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     lastSavedDraftRef.current = nextEditorState.lastSavedDraft
     markdownEditingRef.current = Boolean((isMarkdown || nextEditorState.editing) && isEditableText && !readOnly)
     pendingPreviewScrollRestoreRef.current = null
+    // 重挂载（切 Tab / 关闭重开）后重新进入 Markdown 编辑态时，主加载 effect 的
+    // preserveMarkdownEditor 分支不会设置 restoreScrollRef（那是为“实例未卸载、仅内容
+    // 刷新”保留编辑器实例设计的），但重挂载时编辑器实例必然重建，外层滚动必须由
+    // 这里交给统一的 pending 恢复链路，否则回到顶部。编辑态滚动实时保存在 richScroll。
+    if (restoredEditorState?.editing && isMarkdown && !readOnly) {
+      pendingPreviewScrollRestoreRef.current = { ...restoredEditorState.richScroll }
+      setPreviewScrollRestoreVersion((version) => version + 1)
+    }
 
     setOldContent('')
     setNewContent('')
@@ -1112,6 +1121,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       scrollRafRef.current = 0
       const el = scrollContainerRef.current
       if (el) {
+        // loading 占位或旧内容卸载使 scrollHeight 收缩到视口内时，scrollTop 会被浏览器
+        // clamp 到 0 并派发 scroll 事件；此时写入会把已保存的查看位置覆盖为顶部，跳过。
+        if (!shouldPersistScrollPosition(el.scrollHeight, el.clientHeight)) return
         const position = { top: el.scrollTop, left: el.scrollLeft }
         scrollPositionCache.set(scrollKey, position)
         if (isEditableText && !readOnly) {
