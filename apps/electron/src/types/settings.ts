@@ -245,12 +245,6 @@ export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
 /** 默认特殊风格 */
 export const DEFAULT_THEME_STYLE: ThemeStyle = 'default'
 
-/** 界面风格：经典保留旧版视觉，现代使用当前更克制的 UI */
-export type InterfaceVariant = 'classic' | 'modern'
-
-/** 默认界面风格 */
-export const DEFAULT_INTERFACE_VARIANT: InterfaceVariant = 'modern'
-
 /** Markdown 预览字号档位 */
 export type MarkdownFontSize = 'small' | 'medium' | 'large'
 
@@ -285,8 +279,6 @@ export interface AppSettings {
   themeMode: ThemeMode
   /** 特殊风格主题 */
   themeStyle?: ThemeStyle
-  /** 界面风格 */
-  interfaceVariant?: InterfaceVariant
   /** Agent 默认渠道 ID（由当前 Agent Core 解释） — 当前选中的渠道 */
   agentChannelId?: string
   /** Agent 默认模型 ID */
@@ -331,8 +323,6 @@ export interface AppSettings {
   sendWithCmdEnter?: boolean
   /** 用户自定义快捷键覆盖 */
   shortcutOverrides?: ShortcutOverrides
-  /** 是否显示用户消息悬浮置顶条（默认 true） */
-  stickyUserMessageEnabled?: boolean
   /** 左侧会话列表悬浮预览迷你地图（默认 false，需手动开启） */
   sessionHoverPreviewEnabled?: boolean
   /** 粘贴超过阈值的长文本时是否自动转为附件（默认 false） */
@@ -341,8 +331,6 @@ export interface AppSettings {
   richTextRenderingEnabled?: boolean
   /** Markdown 预览字号档位（默认 'medium'，对应 15px） */
   markdownFontSize?: MarkdownFontSize
-  /** 上次是否在 Scratch Pad 页（用于重启恢复） */
-  scratchPadActive?: boolean
   /** 软件更新检查方式（默认 auto：启动后及每 4 小时自动检查） */
   updateCheckMode?: UpdateCheckMode
   /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */
