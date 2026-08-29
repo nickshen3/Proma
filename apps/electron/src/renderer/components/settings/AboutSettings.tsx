@@ -14,7 +14,9 @@ import {
   SettingsCard,
   SettingsRow,
   SettingsSelect,
+  SettingsSegmentedControl,
 } from './primitives'
+import type { UpdateCheckMode } from '@/types/settings'
 import { updateStatusAtom, updaterAvailableAtom, checkForUpdates } from '@/atoms/updater'
 import { environmentCheckResultAtom } from '@/atoms/environment'
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
@@ -37,6 +39,32 @@ function UpdateCard(): React.ReactElement | null {
   const [idleInstallScheduled, setIdleInstallScheduled] = React.useState(false)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
   const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
+  const [checkMode, setCheckMode] = React.useState<UpdateCheckMode>('auto')
+
+  // 加载当前检查方式（缺省 auto，与主进程默认一致）
+  React.useEffect(() => {
+    window.electronAPI.getSettings()
+      .then((settings) => {
+        if (settings.updateCheckMode === 'auto' || settings.updateCheckMode === 'manual') {
+          setCheckMode(settings.updateCheckMode)
+        }
+      })
+      .catch((err) => console.error('[更新] 读取检查方式失败:', err))
+  }, [])
+
+  /** 切换自动/手动检查方式（乐观更新，失败回滚） */
+  const handleCheckModeChange = async (value: string): Promise<void> => {
+    if (value !== 'auto' && value !== 'manual') return
+    const next = value as UpdateCheckMode
+    const previous = checkMode
+    setCheckMode(next)
+    try {
+      await window.electronAPI.updateSettings({ updateCheckMode: next })
+    } catch (error) {
+      console.error('[更新] 保存检查方式失败:', error)
+      setCheckMode(previous)
+    }
+  }
 
   // updater 不可用时不渲染
   if (!available) return null
@@ -93,6 +121,18 @@ function UpdateCard(): React.ReactElement | null {
 
   return (
     <SettingsCard>
+      <SettingsSegmentedControl
+        label="检查方式"
+        description="自动：启动后自动检查并每 4 小时复查；手动：仅在你点击“检查更新”时检查，切换回自动后立即恢复周期检查。"
+        value={checkMode}
+        onValueChange={(value) => {
+          void handleCheckModeChange(value)
+        }}
+        options={[
+          { value: 'auto', label: '自动' },
+          { value: 'manual', label: '手动' },
+        ]}
+      />
       <SettingsRow label="软件更新">
         <div className="flex items-center gap-3">
           {/* 状态文字 */}

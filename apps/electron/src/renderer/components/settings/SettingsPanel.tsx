@@ -41,6 +41,8 @@ import { appModeAtom } from "@/atoms/app-mode";
 import { activeViewAtom } from "@/atoms/active-view";
 import { automationFormAtom } from "@/atoms/automation-atoms";
 import { hasUpdateAtom } from "@/atoms/updater";
+import { filterSettingTabs, splitLabelByQuery } from "@/lib/settings-search";
+import { SettingsSearchBox } from "./SettingsSearchBox";
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from "@/atoms/tab-atoms";
 import { hasEnvironmentIssuesAtom } from "@/atoms/environment";
 import {
@@ -75,55 +77,113 @@ interface TabItem {
   id: SettingsTab;
   label: string;
   icon: React.ReactNode;
+  /** 快速搜索关键词：同义词与功能词，命中行为与标签名一致 */
+  keywords?: string[];
 }
 
 /** 基础 Tabs（所有模式都有） */
 const BASE_TABS: TabItem[] = [
-  { id: "general", label: "通用设置", icon: <Settings size={16} /> },
-  { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
-  { id: "vision-relay", label: "视觉助手", icon: <Eye size={16} /> },
-  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
-  { id: "agent-roles", label: "Agent 角色", icon: <UsersRound size={16} /> },
-  { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
+  {
+    id: "general",
+    label: "通用设置",
+    icon: <Settings size={16} />,
+    keywords: ["通知", "提示音", "声音", "归档", "头像", "用户名", "档案", "语言", "粘贴", "附件", "预览", "Markdown", "灵动岛", "托盘", "Git 标识"],
+  },
+  {
+    id: "channels",
+    label: "模型配置",
+    icon: <Radio size={16} />,
+    keywords: ["模型", "渠道", "API", "Key", "密钥", "供应商", "接口"],
+  },
+  {
+    id: "vision-relay",
+    label: "视觉助手",
+    icon: <Eye size={16} />,
+    keywords: ["视觉", "识图", "图片识别", "模型路由"],
+  },
+  {
+    id: "prompts",
+    label: "提示词管理",
+    icon: <BookOpen size={16} />,
+    keywords: ["提示词", "Prompt", "系统提示词", "常用语"],
+  },
+  {
+    id: "agent-roles",
+    label: "Agent 角色",
+    icon: <UsersRound size={16} />,
+    keywords: ["角色", "Role", "人设", "预设"],
+  },
+  {
+    id: "proxy",
+    label: "代理设置",
+    icon: <Globe size={16} />,
+    keywords: ["代理", "网络", "HTTP", "VPN"],
+  },
 ];
 
 const TOOLS_TAB: TabItem = {
   id: "tools",
   label: "Chat 工具",
   icon: <Wrench size={16} />,
+  keywords: ["工具", "MCP", "联网搜索", "自定义工具", "Nano Banana"],
 };
 const BOTS_TAB: TabItem = {
   id: "bots",
   label: "远程连接",
   icon: <Bot size={16} />,
+  keywords: ["远程", "Bot", "机器人", "连接"],
 };
 const TUTORIAL_TAB: TabItem = {
   id: "tutorial",
   label: "Proma 教程",
   icon: <GraduationCap size={16} />,
+  keywords: ["教程", "使用", "学习", "文档"],
 };
 const SHORTCUTS_TAB: TabItem = {
   id: "shortcuts",
   label: "快捷键管理",
   icon: <Keyboard size={16} />,
+  keywords: ["快捷键", "热键", "键盘", "Shortcut"],
 };
 const ONBOARDING_TAB: TabItem = {
   id: "onboarding",
   label: "Proma 新手引导",
   icon: <GraduationCap size={16} />,
+  keywords: ["新手", "引导", "入门", "Onboarding"],
 };
 const VOICE_INPUT_TAB: TabItem = {
   id: "voice-input",
   label: "语音输入",
   icon: <Mic size={16} />,
+  keywords: ["语音", "听写", "麦克风", "豆包", "ASR", "热词"],
 };
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
-  { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
-  { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
-  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
+  {
+    id: "migration",
+    label: "数据迁移",
+    icon: <HardDriveDownload size={16} />,
+    keywords: ["迁移", "导入", "导出", "备份", "恢复"],
+  },
+  {
+    id: "storage",
+    label: "磁盘管理",
+    icon: <HardDrive size={16} />,
+    keywords: ["磁盘", "存储", "空间", "清理", "缓存", "临时文件"],
+  },
+  {
+    id: "appearance",
+    label: "外观设置",
+    icon: <Palette size={16} />,
+    keywords: ["外观", "主题", "深色", "浅色", "风格", "界面", "缩放", "字号", "图标"],
+  },
   ONBOARDING_TAB,
-  { id: "about", label: "关于/更新", icon: <Info size={16} /> },
+  {
+    id: "about",
+    label: "关于/更新",
+    icon: <Info size={16} />,
+    keywords: ["关于", "版本", "更新", "升级", "检查更新", "环境", "Node", "Shell", "许可证", "开源"],
+  },
 ];
 
 /** 根据标签页 id 渲染对应内容 */
@@ -298,6 +358,31 @@ export function SettingsPanel({
     ];
   }, [appMode]);
 
+  // ===== 快速搜索：过滤导航项，↑/↓ 选择，Enter 跳转 =====
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [highlightIndex, setHighlightIndex] = React.useState(0)
+  const isSearching = searchQuery.trim() !== ''
+  const visibleTabs = React.useMemo(
+    () => filterSettingTabs(tabs, searchQuery),
+    [tabs, searchQuery],
+  )
+
+  // 搜索词变化后重置键盘选中项
+  React.useEffect(() => {
+    setHighlightIndex(0)
+  }, [searchQuery])
+
+  const handleSearchNavigate = (direction: 1 | -1): void => {
+    if (visibleTabs.length === 0) return
+    setHighlightIndex((index) => (index + direction + visibleTabs.length) % visibleTabs.length)
+  }
+
+  const handleSearchEnter = (): void => {
+    const target = visibleTabs[highlightIndex]
+    if (!target) return
+    handleTabChange(target.id)
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-content-area text-foreground">
       <div className="relative h-[35px] flex-shrink-0 bg-[hsl(var(--sidebar-surface))]">
@@ -308,25 +393,55 @@ export function SettingsPanel({
       <div className="flex flex-1 min-h-0">
         {/* 左侧 Tab 导航 */}
         <div className="flex h-full min-h-0 w-[277px] flex-shrink-0 flex-col border-r border-border/80 bg-[hsl(var(--sidebar-surface))] dark:border-border/70">
-          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pt-5 scrollbar-thin">
-            {tabs.map((tab) => (
+          {/* 快速搜索：位于「通用设置」上方 */}
+          <div className="flex-shrink-0 px-3 pt-4">
+            <SettingsSearchBox
+              value={searchQuery}
+              resultCount={isSearching ? visibleTabs.length : null}
+              onChange={setSearchQuery}
+              onNavigate={handleSearchNavigate}
+              onEnter={handleSearchEnter}
+            />
+          </div>
+          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pt-3 pb-2 scrollbar-thin">
+            {visibleTabs.map((tab, index) => (
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
+                onMouseEnter={() => {
+                  if (isSearching) setHighlightIndex(index)
+                }}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-3 py-2.5 text-sm transition-colors",
                   activeTab === tab.id
                     ? "bg-muted text-foreground font-medium"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                  isSearching && index === highlightIndex && "ring-1 ring-primary/50",
                 )}
               >
                 {tab.icon}
-                <span>{tab.label}</span>
+                <span>
+                  {isSearching
+                    ? splitLabelByQuery(tab.label, searchQuery).map((segment, segmentIndex) => (
+                        <span
+                          key={segmentIndex}
+                          className={segment.matched ? 'text-primary' : undefined}
+                        >
+                          {segment.text}
+                        </span>
+                      ))
+                    : tab.label}
+                </span>
                 {tab.id === "about" && (hasUpdate || hasEnvironmentIssues) && (
                   <span className="w-2 h-2 rounded-full bg-red-500" />
                 )}
               </button>
             ))}
+            {isSearching && visibleTabs.length === 0 && (
+              <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+                没有匹配的设置项
+              </div>
+            )}
           </nav>
           <div className="flex-shrink-0 p-3">
             <button

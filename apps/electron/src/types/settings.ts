@@ -276,6 +276,9 @@ export interface VisionRelaySettings {
 /** 提升此版本可要求用户重新确认更新后的受管浏览器风险告知。 */
 export const BROWSER_RISK_DISCLAIMER_VERSION = 1
 
+/** 软件更新检查方式：auto = 启动后及定期自动检查；manual = 仅手动检查 */
+export type UpdateCheckMode = 'auto' | 'manual'
+
 /** 应用设置 */
 export interface AppSettings {
   /** 主题模式 */
@@ -340,6 +343,8 @@ export interface AppSettings {
   markdownFontSize?: MarkdownFontSize
   /** 上次是否在 Scratch Pad 页（用于重启恢复） */
   scratchPadActive?: boolean
+  /** 软件更新检查方式（默认 auto：启动后及每 4 小时自动检查） */
+  updateCheckMode?: UpdateCheckMode
   /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */
   appIconVariant?: string
   /** 语音输入设置（Access Token 以加密态存储，由专用服务解密后返回渲染进程） */

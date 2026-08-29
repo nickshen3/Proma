@@ -169,6 +169,7 @@ import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
 import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerPromaDirectoryPath, registerPromaFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
+import { setUpdaterCheckMode } from './lib/updater/auto-updater'
 import {
   listChannels,
   createChannel,
@@ -1834,6 +1835,9 @@ export function registerIpcHandlers(): void {
       }
       if (updates.agentIsland !== undefined) {
         refreshAgentIslandConfiguration()
+      }
+      if (updates.updateCheckMode !== undefined) {
+        setUpdaterCheckMode(result.updateCheckMode ?? 'auto')
       }
 
       // 主题相关设置变化时，广播给所有窗口（跨窗口同步，如 Quick Task 面板）

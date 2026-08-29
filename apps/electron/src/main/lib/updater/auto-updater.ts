@@ -10,6 +10,9 @@ import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { createIdleInstallScheduler } from './idle-install-scheduler'
+import { createUpdateCheckScheduler } from './update-check-scheduler'
+import { getSettings } from '../settings-service'
+import type { UpdateCheckMode } from '../../../types'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -17,8 +20,13 @@ let currentStatus: UpdateStatus = { status: 'idle' }
 /** 主窗口引用 */
 let win: BrowserWindow | null = null
 
-/** 定时检查定时器 */
-let checkInterval: ReturnType<typeof setInterval> | null = null
+/** 自动检查调度（auto / manual 由设置驱动），定时器行为见 update-check-scheduler */
+const updateCheckScheduler = createUpdateCheckScheduler({
+  check: () => { void checkForUpdates() },
+})
+
+/** updater 是否已初始化（仅打包环境调用 initAutoUpdater 后为 true） */
+let initialized = false
 
 /** 由 Agent 服务注入，覆盖所有窗口/后台 Agent 的运行状态。 */
 let hasActiveAgents = (): boolean => false
@@ -104,6 +112,16 @@ export function cancelIdleInstall(): void {
 }
 
 /**
+ * 设置变更入口：切换自动/手动检查方式。
+ *
+ * 仅在打包环境初始化过 updater 后生效，避免开发环境误启定时检查。
+ */
+export function setUpdaterCheckMode(mode: UpdateCheckMode): void {
+  if (!initialized) return
+  updateCheckScheduler.setMode(mode)
+}
+
+/**
  * 退出并安装已下载的更新。
  *
  * 所有安装入口最终都经过这里：即使调用方绕过空闲调度器，也不会在 Agent
@@ -139,10 +157,7 @@ function quitAndInstall(): void {
 
 /** 清理更新器资源（定时器等） */
 export function cleanupUpdater(): void {
-  if (checkInterval) {
-    clearInterval(checkInterval)
-    checkInterval = null
-  }
+  updateCheckScheduler.dispose()
   idleInstallScheduler.dispose()
 }
 
@@ -152,6 +167,7 @@ export function cleanupUpdater(): void {
  * @param mainWindow - 主窗口实例，用于推送更新状态
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
+  initialized = true
   configureUpdater(mainWindow)
 
   autoUpdater.logger = {
@@ -216,27 +232,17 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     })
   })
 
-  // 启动后延迟 10 秒首次检查
-  setTimeout(() => {
-    console.log('[更新] 首次自动检查更新')
-    checkForUpdates()
-  }, 10_000)
-
-  // 每 4 小时自动检查一次
-  checkInterval = setInterval(() => {
-    console.log('[更新] 定时自动检查更新')
-    checkForUpdates()
-  }, 4 * 60 * 60 * 1000)
+  // 启动延迟首次检查 + 周期复查由调度器按「检查方式」设置驱动；manual 模式不安排自动检查。
+  const { updateCheckMode } = getSettings()
+  updateCheckScheduler.setMode(updateCheckMode ?? 'auto')
+  updateCheckScheduler.start()
 
   // 窗口关闭时清理定时器
   mainWindow.on('closed', () => {
-    if (checkInterval) {
-      clearInterval(checkInterval)
-      checkInterval = null
-    }
+    updateCheckScheduler.dispose()
     idleInstallScheduler.dispose()
     win = null
   })
 
-  console.log('[更新] 自动更新模块已初始化（自动下载，支持空闲时安装）')
+  console.log('[更新] 自动更新模块已初始化（自动下载，支持空闲时安装，检查方式可切换）')
 }
