@@ -82,9 +82,11 @@ jobs:
         include:
           - name: windows-latest, win, x64
             os: windows-latest
+            platform: windows
             builder_args: '--win --x64'
           - name: macos-latest, mac, arm64
             os: macos-latest
+            platform: macos
             builder_args: '--mac --arm64'
 
     # 步骤默认工作目录：apps/electron
@@ -105,6 +107,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # 读取应用版本号（apps/electron/package.json），用于 artifact 命名，
+      # 与安装包内 electron-builder 版本保持一致
+      - name: 读取应用版本号
+        id: app-version
+        shell: bash
+        working-directory: .
+        run: echo "version=$(node -p "require('./apps/electron/package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: 安装依赖
         run: bun install --frozen-lockfile
@@ -128,7 +138,7 @@ jobs:
       - name: 上传安装包 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proma-${{ matrix.os }}-${{ github.run_number }}
+          name: proma-${{ matrix.platform }}-${{ steps.app-version.outputs.version }}
           path: |
             apps/electron/out/*.exe
             apps/electron/out/*.dmg
@@ -162,6 +172,13 @@ jobs:
         with:
           node-version: 22
 
+      # 与 package job 保持一致：版本号来自 apps/electron/package.json
+      - name: 读取应用版本号
+        id: app-version
+        shell: bash
+        working-directory: .
+        run: echo "version=$(node -p "require('./apps/electron/package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: 安装依赖
         run: bun install --frozen-lockfile
         working-directory: .
@@ -183,7 +200,7 @@ jobs:
       - name: 上传安装包 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proma-macos-15-intel-${{ github.run_number }}
+          name: proma-macos-x64-${{ steps.app-version.outputs.version }}
           path: |
             apps/electron/out/*.dmg
             apps/electron/out/*.zip
