@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, Blocks, Brain, ListTodo, GitBranch, Download, Loader2, RotateCw } from 'lucide-react'
+import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, Blocks, Brain, LayoutGrid, ListTodo, GitBranch, Download, Loader2, RotateCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -811,6 +811,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const searchDialogOpen = useAtomValue(searchDialogOpenAtom)
   const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
   const newChatShortcutLabel = getAcceleratorDisplay(getActiveAccelerator('new-session'))
+
+  // 工作区工具内联展开状态：浮层菜单在多窗口焦点竞争环境下会因 window blur 闪关，改用侧栏内联展开。
+  const [toolsExpanded, setToolsExpanded] = React.useState(false)
+  const isVaultToolActive = mode === 'chat' ? activeView === 'vault' : isWorkspaceComponentActive('vault')
+  const skillUpdateCount = capabilities?.skills.filter((skill) => skill.hasUpdate).length ?? 0
+  const hasActiveWorkspaceTool = isVaultToolActive
+    || (['todos', 'calendar', 'automations', 'skills', 'mcp', 'memory', 'vault'] as WorkspaceComponentTab[]).some(isWorkspaceComponentActive)
 
   /** 归档会话只在用户打开归档视图时加载；active 视图只保留未归档元数据。 */
   const refreshAgentSidebarSessions = React.useCallback(async (includeArchived: boolean): Promise<void> => {
@@ -3599,62 +3606,99 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         </Tooltip>
       </div>
 
-      {/* 项目级组件：每一行直接打开对应的右侧工作区 Tab。 */}
-      <div className="space-y-0.5 px-3 pb-0.5 pt-2">
-        <WorkspaceComponentSidebarEntry
-          label="Todo"
-          icon={<ListTodo size={16} />}
-          active={isWorkspaceComponentActive('todos')}
-          onClick={() => handleOpenPlanningComponent('todos')}
-        />
-        <WorkspaceComponentSidebarEntry
-          label="日程"
-          icon={<CalendarDays size={16} />}
-          active={isWorkspaceComponentActive('calendar')}
-          onClick={() => handleOpenPlanningComponent('calendar')}
-        />
-        <WorkspaceComponentSidebarEntry
-          label="Obsidian"
-          icon={<ObsidianIcon size={16} />}
-          active={mode === 'chat' ? activeView === 'vault' : isWorkspaceComponentActive('vault')}
-          onClick={handleOpenVault}
-        />
-      </div>
-
-      {mode === 'agent' && (
-        <div className="px-3 pb-0.5">
-          <WorkspaceComponentSidebarEntry
-            label="项目记忆"
-            icon={<Brain size={16} />}
-            active={isWorkspaceComponentActive('memory')}
-            onClick={() => handleOpenCapabilityComponent('memory')}
-          />
+      {/* 工作区工具：收起时单行入口不挤压会话列表，点击后内联展开；无浮层无焦点管理，避免焦点竞争环境下菜单闪关。 */}
+      <div className="px-3 pb-0.5 pt-2">
+        <button
+          type="button"
+          aria-label="工作区工具"
+          aria-expanded={toolsExpanded}
+          onClick={() => setToolsExpanded((expanded) => !expanded)}
+          className={cn(
+            'group flex w-full items-center justify-between rounded-md px-3 py-2 text-[13px] transition-colors duration-100 titlebar-no-drag',
+            hasActiveWorkspaceTool
+              ? 'bg-accent-foreground/[0.10] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+              : 'text-foreground/75 hover:bg-accent-foreground/[0.08] hover:text-foreground',
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-3">
+            <span className={cn('flex size-[18px] shrink-0 items-center justify-center', hasActiveWorkspaceTool ? 'text-accent-foreground' : 'text-foreground/60')}>
+              <LayoutGrid size={16} />
+            </span>
+            <span className="truncate">工作区工具</span>
+          </span>
+          <span className="ml-2 flex shrink-0 items-center gap-1.5">
+            {automationCount > 0 && (
+              <span className={cn(
+                'flex h-5 min-w-[22px] items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
+                isWorkspaceComponentActive('automations')
+                  ? 'bg-accent-foreground/[0.26] text-primary-foreground'
+                  : 'bg-foreground/[0.045] text-foreground/60 group-hover:text-foreground/75',
+              )}>{formatAutomationCount(automationCount)}</span>
+            )}
+            {mode === 'agent' && skillUpdateCount > 0 && <span className="size-2.5 rounded-full bg-blue-500" />}
+            <ChevronRight size={14} className={cn('text-foreground/40 transition-transform duration-200', toolsExpanded && 'rotate-90')} />
+          </span>
+        </button>
+        <div
+          className={cn(
+            'grid transition-[grid-template-rows] duration-200 ease-out',
+            toolsExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="space-y-0.5 pt-0.5">
+              <WorkspaceComponentSidebarEntry
+                label="Todo"
+                icon={<ListTodo size={16} />}
+                active={isWorkspaceComponentActive('todos')}
+                onClick={() => { handleOpenPlanningComponent('todos'); setToolsExpanded(false) }}
+              />
+              <WorkspaceComponentSidebarEntry
+                label="日程"
+                icon={<CalendarDays size={16} />}
+                active={isWorkspaceComponentActive('calendar')}
+                onClick={() => { handleOpenPlanningComponent('calendar'); setToolsExpanded(false) }}
+              />
+              <WorkspaceComponentSidebarEntry
+                label="Obsidian"
+                icon={<ObsidianIcon size={16} />}
+                active={isVaultToolActive}
+                onClick={() => { handleOpenVault(); setToolsExpanded(false) }}
+              />
+              <WorkspaceComponentSidebarEntry
+                label="定时任务"
+                icon={<Clock size={16} />}
+                active={isWorkspaceComponentActive('automations')}
+                onClick={() => { handleOpenPlanningComponent('automations'); setToolsExpanded(false) }}
+                badge={automationCount > 0 ? (
+                  <span className={cn(
+                    'flex h-5 min-w-[22px] items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
+                    isWorkspaceComponentActive('automations')
+                      ? 'bg-accent-foreground/[0.26] text-primary-foreground'
+                      : 'bg-foreground/[0.045] text-foreground/60 group-hover:text-foreground/75',
+                  )}>{formatAutomationCount(automationCount)}</span>
+                ) : undefined}
+              />
+              {mode === 'agent' && (
+                <>
+                  <WorkspaceComponentSidebarEntry
+                    label="MCP/Skills"
+                    icon={<Blocks size={16} />}
+                    active={isWorkspaceComponentActive('skills') || isWorkspaceComponentActive('mcp')}
+                    onClick={() => { handleOpenMcpSkillsComponents(); setToolsExpanded(false) }}
+                    badge={skillUpdateCount > 0 ? <span className="size-2.5 rounded-full bg-blue-500" /> : undefined}
+                  />
+                  <WorkspaceComponentSidebarEntry
+                    label="项目记忆"
+                    icon={<Brain size={16} />}
+                    active={isWorkspaceComponentActive('memory')}
+                    onClick={() => { handleOpenCapabilityComponent('memory'); setToolsExpanded(false) }}
+                  />
+                </>
+              )}
+            </div>
+          </div>
         </div>
-      )}
-      <div className="space-y-0.5 px-3 pb-0.5">
-        <WorkspaceComponentSidebarEntry
-          label="定时任务"
-          icon={<Clock size={16} />}
-          active={isWorkspaceComponentActive('automations')}
-          onClick={() => handleOpenPlanningComponent('automations')}
-          badge={automationCount > 0 ? (
-            <span className={cn(
-              'flex h-5 min-w-[22px] items-center justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums',
-              isWorkspaceComponentActive('automations')
-                ? 'bg-accent-foreground/[0.26] text-primary-foreground'
-                : 'bg-foreground/[0.045] text-foreground/60 group-hover:text-foreground/75',
-            )}>{formatAutomationCount(automationCount)}</span>
-          ) : undefined}
-        />
-        {mode === 'agent' && (
-          <WorkspaceComponentSidebarEntry
-            label="MCP/Skills"
-            icon={<Blocks size={16} />}
-            active={isWorkspaceComponentActive('skills') || isWorkspaceComponentActive('mcp')}
-            onClick={handleOpenMcpSkillsComponents}
-            badge={(capabilities?.skills.filter((skill) => skill.hasUpdate).length ?? 0) > 0 ? <span className="size-2.5 rounded-full bg-blue-500" /> : undefined}
-          />
-        )}
       </div>
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
