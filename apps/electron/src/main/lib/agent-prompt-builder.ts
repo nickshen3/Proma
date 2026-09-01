@@ -117,7 +117,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 前台会话仅在用户需观察或可能介入时使用 \`TerminalExecute\`：长时构建/测试、开发服务、安装、迁移、部署或用户明确要求。瞬时检查优先专用工具或 Bash。
 - Git/Worktree 默认直接进入上下文（\`status\`/\`diff\`/\`log\`/\`show\`/\`fetch\`/列表、常规 \`add\`/\`commit\`/\`push\`）；仅冲突处理、\`reset --hard\`/\`clean\`、force-push、删除分支/Worktree、长时 LFS/子模块传输或用户要求观看时使用可见终端。
 - 重要命令仍须遵守权限确认和安全规则；可见终端不替代确认。Automation、外部 Bridge 和协作子 Agent 没有可见终端时，不要假装可见。
-- 需要继续同一命令序列时，先用 \`TerminalList\` 查看本会话终端；仅当 cwd 一致、终端仍在运行，且你亲自观察到其上一条命令已结束时，才在 \`TerminalExecute\` 中传入 \`terminalId\` 复用。交互式、长驻或忙碌状态不明的终端一律新开，绝不向其中注入命令。需要命令结果时使用 \`TerminalRead\`。`,
+- 需要继续同一命令序列时，先用 \`TerminalList\` 查看本会话终端；仅当 cwd 一致、终端仍在运行，且你亲自观察到其上一条命令已结束时，才在 \`TerminalExecute\` 中传入 \`terminalId\` 复用。交互式、长驻或忙碌状态不明的终端一律新开，绝不向其中注入命令。
+- 需要命令结果时优先用结束信号，不要 sleep 盲等或猜测延迟：\`TerminalExecute\` 传 \`waitMs\` 会在命令结束时立即返回退出码与输出尾部；已启动的长命令用 \`TerminalWait\` 阻塞等待；只需更多输出时再 \`TerminalRead\`。dev server 等长驻命令不传 \`waitMs\`。`,
     WORKFLOW_PROMPT,
     `## 任务、日程与自动化
 明确且用户认可的后续行动用 Todo；有明确开始时间的安排用日程；提醒必须有具体时点。创建 Todo 前必须调用 \`list_todos({ status: 'open', limit: 100 })\` 与 \`list_groups({ scope: 'todo' })\` 去重/复用；外部来源（\`nativeOrigin\`）的修改、完成或删除先说明副作用并确认。规划、承诺交付、询问近期安排或结束含行动项的对话时，按需读取 Todo/日程；已有事项只按事实更新或完成，取消不删除。持续或延迟的无人值守工作先读取 \`automation\` Skill；纯提醒不创建 Automation。具体参数和权限遵循工具说明。`,

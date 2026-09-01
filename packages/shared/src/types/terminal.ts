@@ -20,12 +20,25 @@ export const TERMINAL_IPC_CHANNELS = {
 
 export type TerminalProfile = 'default' | 'zsh' | 'bash' | 'pwsh' | 'powershell' | 'cmd' | 'git-bash' | 'wsl'
 
+/**
+ * 实际解析出的 shell 家族，决定命令结束 marker 与一次性命令参数的拼法。
+ * - posix：zsh / bash / Git Bash / WSL 内的 Linux shell；
+ * - powershell：Windows PowerShell 与 PowerShell 7；
+ * - cmd：Windows Command Prompt，无法回显控制序列，不支持命令级等待信号。
+ */
+export type TerminalShellKind = 'posix' | 'powershell' | 'cmd'
+
 export interface TerminalCreateInput {
   terminalId: string
   /** 终端所属 Agent 会话；主进程据此在会话删除时回收 PTY。 */
   sessionId: string
   cwd?: string
   profile?: TerminalProfile
+  /**
+   * 一次性命令：提供时 PTY 直接以 <shell> -c <command> 运行，命令结束即 shell 退出，
+   * 从而获得精确的 exit 信号；不提供时为长驻交互 shell。
+   */
+  command?: string
   cols: number
   rows: number
 }
@@ -47,6 +60,10 @@ export interface TerminalState {
   cwd: string
   profile: TerminalProfile
   pid: number
+  /** 实际解析出的 shell 家族；供主进程决定命令结束信号的拼法。 */
+  shellKind?: TerminalShellKind
+  /** 一次性命令终端的原始命令；交互终端不带该字段。 */
+  command?: string
 }
 
 export interface TerminalOutputEvent {

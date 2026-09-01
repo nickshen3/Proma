@@ -86,6 +86,7 @@ import {
   listAgentTerminals,
   openAgentTerminal,
   readAgentTerminalOutput,
+  waitForAgentTerminalCommand,
 } from '../terminal-service'
 import {
   automationCreateToolParameters,
@@ -1349,13 +1350,14 @@ function buildAgentTerminalTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
     sdk.defineTool({
       name: 'TerminalExecute',
       label: '在可见终端执行命令',
-      description: 'Run one command in a visible Agent-owned terminal Tab. Omit terminalId to open a new Tab, or provide the ID of a current-session running terminal to reuse it. The user can see and interrupt it. Call TerminalRead with the returned terminal ID when you need to inspect its output; output is never pushed into this tool result.',
-      promptSnippet: 'Use the visible terminal for user-attended commands that benefit from execution visibility. Before reusing a terminal, call TerminalList and reuse only a current-session terminal with a matching cwd whose previous command you observed finish; otherwise omit terminalId to open a new Tab. If the result matters, call TerminalRead after it has produced output instead of assuming output is returned automatically.',
+      description: 'Run one command in a visible Agent-owned terminal Tab. Omit terminalId to open a new Tab, or provide the ID of a current-session running terminal to reuse it. The user can see and interrupt it. Output is never pushed into this tool result unless waitMs is provided: with waitMs the call blocks until the command finishes (or the timeout) and returns its exit code plus the output tail. Call TerminalRead for full output.',
+      promptSnippet: 'Use the visible terminal for user-attended commands that benefit from execution visibility. Before reusing a terminal, call TerminalList and reuse only a current-session terminal with a matching cwd whose previous command you observed finish; otherwise omit terminalId to open a new Tab. When you need the command result, pass waitMs instead of guessing a sleep delay; do not pass waitMs for long-lived commands like dev servers — wait with TerminalWait or poll TerminalRead instead.',
       parameters: Type.Object({
         command: Type.String({ description: 'Complete command to execute in the controlled shell. Do not prepend shell wrappers.' }),
         terminalId: Type.Optional(Type.String({ description: 'Current-session running Agent terminal to reuse. First inspect candidates with TerminalList; do not reuse an interactive, long-running, or unverified-busy terminal.' })),
         cwd: Type.Optional(Type.String({ description: 'Absolute or Agent-CWD-relative directory within the current authorized roots. Used only when opening a new terminal.' })),
         title: Type.Optional(Type.String({ description: 'Short visible terminal title. Used only when opening a new terminal.' })),
+        waitMs: Type.Optional(Type.Number({ description: 'Optional milliseconds (1000-120000) to wait for the command to finish. When provided, the result includes the exit code and output tail as soon as the command ends, or status running on timeout. New terminals run the command one-shot for a precise exit signal; reused interactive terminals append a tiny invisible completion marker. Omit for long-lived commands.' })),
       }),
       async execute(_toolCallId, params) {
         const args = params as Record<string, unknown>
@@ -1364,8 +1366,43 @@ function buildAgentTerminalTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
         const terminalId = typeof args.terminalId === 'string' && args.terminalId.trim()
           ? args.terminalId.trim()
           : undefined
-        const record = await executeAgentTerminal({ ...agentContext, ...terminalInput(args), command, terminalId })
-        return jsonToolResult({ terminal: record, commandStarted: true, reused: Boolean(terminalId), outputSharedWithAgent: false })
+        const waitMs = typeof args.waitMs === 'number' && Number.isFinite(args.waitMs) ? args.waitMs : undefined
+        const record = await executeAgentTerminal({
+          ...agentContext,
+          ...terminalInput(args),
+          command,
+          terminalId,
+          ...(waitMs === undefined ? {} : { waitMs }),
+        })
+        const wait = waitMs === undefined
+          ? undefined
+          : await waitForAgentTerminalCommand(ctx.sessionId, record.terminalId, waitMs)
+        return jsonToolResult({
+          terminal: record,
+          commandStarted: true,
+          reused: Boolean(terminalId),
+          outputSharedWithAgent: false,
+          ...(wait === undefined ? {} : { wait }),
+        })
+      },
+    }),
+    sdk.defineTool({
+      name: 'TerminalWait',
+      label: '等待 Agent 终端命令结束',
+      description: 'Wait for the current command of a current-session Agent terminal to finish, instead of guessing with sleeps. Returns finished with exitCode and output tail when the command ends, running on timeout, or terminated if the terminal was closed. Only terminals whose command was started with waitMs (TerminalExecute) or one-shot terminals provide this signal.',
+      promptSnippet: 'After starting or waiting on a long command in an Agent terminal, call TerminalWait to block until it finishes instead of sleeping or blind-polling. Combine with TerminalRead when you need more than the returned output tail.',
+      parameters: Type.Object({
+        terminalId: Type.String({ description: 'Terminal ID returned by TerminalOpen, TerminalExecute, or TerminalList.' }),
+        timeoutMs: Type.Optional(Type.Number({ description: 'Maximum milliseconds to wait, clamped to 1000-120000. Defaults to 30000.' })),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as Record<string, unknown>
+        const terminalId = typeof args.terminalId === 'string' ? args.terminalId : ''
+        const timeoutMs = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
+          ? args.timeoutMs
+          : 30_000
+        const result = await waitForAgentTerminalCommand(ctx.sessionId, terminalId, timeoutMs)
+        return jsonToolResult(result)
       },
     }),
     sdk.defineTool({

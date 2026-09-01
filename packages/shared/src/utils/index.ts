@@ -67,6 +67,17 @@ export {
   type SDKCompactStatus,
 } from './agent-system-message'
 export {
+  buildCommandMarkerEcho,
+  buildOneShotSpawnPlan,
+  createCommandMarkerScanner,
+  generateCommandMarkerId,
+  type CommandMarkerHit,
+  type NodePlatform,
+  type OneShotShellKind,
+  type OneShotSpawnInput,
+  type ShellSpawnPlan,
+} from './terminal-command-signal'
+export {
   getSkillSlugFromEntryPath,
   createSkillActivationFromPath,
   mergeSkillActivations,

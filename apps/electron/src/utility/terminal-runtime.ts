@@ -3,7 +3,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, type IPty } from 'node-pty'
 import {
+  buildOneShotSpawnPlan,
   isTerminalProfile,
+  type NodePlatform,
+  type OneShotShellKind,
   type TerminalCreateInput,
   type TerminalExitEvent,
   type TerminalInput,
@@ -11,6 +14,7 @@ import {
   type TerminalOutputEvent,
   type TerminalProfile,
   type TerminalResizeInput,
+  type TerminalShellKind,
   type TerminalState,
 } from '@proma/shared'
 
@@ -116,7 +120,7 @@ function createTerminal(input: RuntimeTerminalCreateInput): void {
     return
   }
   const profile = isTerminalProfile(input.profile) ? input.profile : 'default'
-  const shell = resolveShell(profile)
+  const shell = resolveShell(profile, input.command)
   try {
     const cwd = getSafeCwd(input.cwd, input.strictCwd === true)
     const pty = spawn(shell.file, shell.args, {
@@ -132,6 +136,9 @@ function createTerminal(input: RuntimeTerminalCreateInput): void {
       cwd,
       profile,
       pid: pty.pid,
+      // wsl 内是 Linux shell，marker/one-shot 语义归入 posix 家族。
+      shellKind: shell.kind === 'wsl' ? 'posix' : shell.kind,
+      ...(input.command === undefined ? {} : { command: input.command }),
     }
     const managed: ManagedTerminal = {
       pty,
@@ -247,28 +254,48 @@ function normalizeDimension(value: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1
 }
 
-function resolveShell(profile: TerminalProfile): { file: string; args: string[]; title: string } {
+interface ResolvedShell {
+  file: string
+  args: string[]
+  title: string
+  /** 实际解析出的 shell 家族；wsl 单列，仅在一次性 spawn 时需要特殊处理。 */
+  kind: OneShotShellKind
+}
+
+function resolveShell(profile: TerminalProfile, command?: string): ResolvedShell {
+  const interactive = resolveInteractiveShell(profile)
+  if (command === undefined) return interactive
+  // 一次性命令：让 shell 直接运行命令，命令结束即退出，从而产生精确的 exit 信号。
+  const plan = buildOneShotSpawnPlan({
+    shellKind: interactive.kind,
+    platform: process.platform === 'win32' ? 'win32' : 'other',
+    command,
+    interactive: { file: interactive.file, args: interactive.args },
+  })
+  return { ...interactive, file: plan.file, args: plan.args }
+}
+
+function resolveInteractiveShell(profile: TerminalProfile): ResolvedShell {
   if (process.platform === 'darwin') {
     const shell = profile === 'bash' ? '/bin/bash' : process.env.SHELL || '/bin/zsh'
-    return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal' }
+    return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal', kind: 'posix' }
   }
   if (process.platform === 'win32') return resolveWindowsShell(profile)
   const shell = profile === 'zsh' ? '/bin/zsh' : process.env.SHELL || '/bin/bash'
-  return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal' }
+  return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal', kind: 'posix' }
 }
 
-function resolveWindowsShell(profile: TerminalProfile): { file: string; args: string[]; title: string } {
+function resolveWindowsShell(profile: TerminalProfile): ResolvedShell {
   const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
   const gitBash = join(programFiles, 'Git', 'bin', 'bash.exe')
   const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  if (profile === 'wsl') return { file: 'wsl.exe', args: [], title: 'WSL' }
-  if (profile === 'git-bash' && existsSync(gitBash)) return { file: gitBash, args: ['--login', '-i'], title: 'Git Bash' }
-  if (profile === 'cmd') return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt' }
-  if (profile === 'pwsh' || profile === 'powershell') return { file: 'pwsh.exe', args: ['-NoLogo'], title: 'PowerShell' }
+  if (profile === 'wsl') return { file: 'wsl.exe', args: [], title: 'WSL', kind: 'wsl' }
+  if (profile === 'git-bash' && existsSync(gitBash)) return { file: gitBash, args: ['--login', '-i'], title: 'Git Bash', kind: 'posix' }
+  if (profile === 'cmd') return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt', kind: 'cmd' }
+  if (profile === 'pwsh' || profile === 'powershell') return { file: 'pwsh.exe', args: ['-NoLogo'], title: 'PowerShell', kind: 'powershell' }
   // 默认使用系统 Windows PowerShell；PowerShell 7、Git Bash 与 WSL 由 profile 显式选择。
-  if (profile === 'default' && existsSync(powershell)) return { file: powershell, args: ['-NoLogo'], title: 'PowerShell' }
-  if (profile === 'default') return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt' }
-  return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt' }
+  if (profile === 'default' && existsSync(powershell)) return { file: powershell, args: ['-NoLogo'], title: 'PowerShell', kind: 'powershell' }
+  return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt', kind: 'cmd' }
 }
 
 function isRuntimeRequest(value: unknown): value is RuntimeRequest {

@@ -14,6 +14,7 @@ export const TOOL_REQUIRED_PARAMS: ReadonlyMap<string, ReadonlyArray<string>> = 
   ['Glob', ['pattern']],
   ['Grep', ['pattern']],
   ['TerminalExecute', ['command']],
+  ['TerminalWait', ['terminalId']],
   ['TerminalInterrupt', ['terminalId']],
   ['TerminalClose', ['terminalId']],
 ])
