@@ -1,23 +1,11 @@
 import React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Circle, ExternalLink, Square } from 'lucide-react'
-import { agentProcessesAtom } from '@/atoms/session-process-atoms'
 import { agentTerminalTabsAtom } from '@/atoms/agent-atoms'
+import { agentProcessesAtom, buildProcessRows, type ChildSessionRef, type ProcessRow } from '@/atoms/session-process-atoms'
 import { cn } from '@/lib/utils'
 
 type StatusFilter = 'active' | 'all'
-
-/** 面板行：命令进程来自 main 镜像；终端从 agentTerminalTabsAtom 合成（活着的终端即 running）。 */
-interface ProcessRow {
-  processId: string
-  kind: 'command' | 'terminal'
-  title: string
-  status: 'running' | 'exited' | 'killed'
-  startedAt: number
-  pid?: number
-  exitCode?: number
-  terminalId?: string
-}
 
 const STATUS_META: Record<ProcessRow['status'], { label: string; className: string }> = {
   running: { label: '运行中', className: 'text-emerald-500' },
@@ -34,11 +22,13 @@ function formatDuration(startedAt: number, endedAt?: number): string {
 
 interface ProcessesPanelProps {
   sessionId: string
+  /** 协作子 Agent / 探索分支：其进程聚合进当前面板（FR6.3 v2）。 */
+  childSessions?: ChildSessionRef[]
   /** 跳转到终端独立 tab。 */
   onOpenTerminalTab?: (terminalId: string) => void
 }
 
-export function ProcessesPanel({ sessionId, onOpenTerminalTab }: ProcessesPanelProps): React.ReactElement {
+export function ProcessesPanel({ sessionId, childSessions = [], onOpenTerminalTab }: ProcessesPanelProps): React.ReactElement {
   const commandProcesses = useAtomValue(agentProcessesAtom)
   const setCommandProcesses = useSetAtom(agentProcessesAtom)
   const terminalTabs = useAtomValue(agentTerminalTabsAtom)
@@ -72,33 +62,10 @@ export function ProcessesPanel({ sessionId, onOpenTerminalTab }: ProcessesPanelP
     return () => clearInterval(timer)
   }, [hasRunning])
 
-  const rows = React.useMemo<ProcessRow[]>(() => {
-    const commandRows: ProcessRow[] = (commandProcesses.get(sessionId) ?? []).map(row => ({
-      processId: row.processId,
-      kind: 'command',
-      title: row.title,
-      status: row.status,
-      startedAt: row.startedAt,
-      pid: row.pid,
-      exitCode: row.exitCode,
-    }))
-    const terminalRows: ProcessRow[] = (terminalTabs.get(sessionId) ?? []).map(tab => ({
-      processId: `terminal:${tab.terminalId}`,
-      kind: 'terminal',
-      title: tab.title,
-      status: 'running',
-      startedAt: 0,
-      terminalId: tab.terminalId,
-    }))
-    const merged = [...commandRows, ...terminalRows]
-    const filtered = filter === 'active' ? merged.filter(row => row.status === 'running') : merged
-    return filtered.sort((a, b) => {
-      const aRunning = a.status === 'running' ? 0 : 1
-      const bRunning = b.status === 'running' ? 0 : 1
-      if (aRunning !== bRunning) return aRunning - bRunning
-      return b.startedAt - a.startedAt
-    })
-  }, [commandProcesses, terminalTabs, sessionId, filter])
+  const rows = React.useMemo<ProcessRow[]>(
+    () => buildProcessRows(sessionId, commandProcesses, terminalTabs, childSessions, filter),
+    [commandProcesses, terminalTabs, sessionId, childSessions, filter],
+  )
 
   const selected = rows.find(row => row.processId === selectedId) ?? null
 
@@ -131,7 +98,7 @@ export function ProcessesPanel({ sessionId, onOpenTerminalTab }: ProcessesPanelP
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" role="list">
           {rows.map(row => (
             <ProcessRowItem
-              key={row.processId}
+              key={`${row.ownerSessionId}:${row.processId}`}
               row={row}
               selected={row.processId === selectedId}
               confirming={confirmingId === row.processId}
@@ -144,7 +111,7 @@ export function ProcessesPanel({ sessionId, onOpenTerminalTab }: ProcessesPanelP
                   void window.electronAPI.killTerminal(row.terminalId).catch(console.error)
                 }
                 else {
-                  void window.electronAPI.killSessionProcess({ sessionId, processId: row.processId }).catch(console.error)
+                  void window.electronAPI.killSessionProcess({ sessionId: row.ownerSessionId, processId: row.processId }).catch(console.error)
                 }
               }}
               onOpenTerminalTab={onOpenTerminalTab}
@@ -155,7 +122,7 @@ export function ProcessesPanel({ sessionId, onOpenTerminalTab }: ProcessesPanelP
 
       {selected && selected.kind === 'command' && (
         <ProcessOutputView
-          sessionId={sessionId}
+          sessionId={selected.ownerSessionId}
           processId={selected.processId}
           title={selected.title}
           pid={selected.pid}
@@ -196,7 +163,12 @@ function ProcessRowItem({ row, selected, confirming, onSelect, onKillRequest, on
         )}
       >
         <Circle className={cn('size-2 shrink-0 fill-current', meta.className)} />
-        <span className="min-w-0 flex-1 truncate" title={row.title}>{row.title}</span>
+        <span className="min-w-0 flex-1 truncate" title={row.title}>
+          {row.title}
+          {row.ownerLabel && (
+            <span className="ml-1.5 rounded bg-muted px-1 py-px align-middle text-[10px] text-muted-foreground">{row.ownerLabel}</span>
+          )}
+        </span>
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {row.kind === 'terminal'
             ? '终端'

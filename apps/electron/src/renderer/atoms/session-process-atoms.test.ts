@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { applySessionProcessEvent, compareProcesses } from './session-process-atoms'
+import { applySessionProcessEvent, buildProcessRows, compareProcesses } from './session-process-atoms'
 import type { SessionProcessInfo } from '@proma/shared'
 
 function makeProcess(partial: Partial<SessionProcessInfo> = {}): SessionProcessInfo {
@@ -58,5 +58,55 @@ describe('compareProcesses', () => {
     const running = makeProcess()
     const exited = makeProcess({ status: 'exited', endedAt: 1, startedAt: 999 })
     expect(compareProcesses(running, exited)).toBeLessThan(0)
+  })
+})
+
+describe('buildProcessRows（父会话聚合子会话进程）', () => {
+  const processes = new Map<string, SessionProcessInfo[]>([
+    ['A', [makeProcess({ processId: 'p-a', sessionId: 'A', title: 'own-cmd' })]],
+    ['A1', [makeProcess({ processId: 'p-a1', sessionId: 'A1', title: 'child-cmd' })]],
+  ])
+  const terminals = new Map<string, { terminalId: string; title: string }[]>([
+    ['A', [{ terminalId: 't-a', title: 'own-shell' }]],
+    ['A1', [{ terminalId: 't-a1', title: 'child-shell' }]],
+  ])
+  const children = [{ sessionId: 'A1', label: 'A1 · 子任务' }]
+
+  it('父会话行带自身来源，无 ownerLabel', () => {
+    const rows = buildProcessRows('A', processes, terminals, children, 'all')
+    const own = rows.find(row => row.processId === 'p-a')
+    expect(own?.ownerSessionId).toBe('A')
+    expect(own?.ownerLabel).toBeUndefined()
+  })
+
+  it('子会话命令进程聚合进父面板并带来源标识', () => {
+    const rows = buildProcessRows('A', processes, terminals, children, 'all')
+    const child = rows.find(row => row.processId === 'p-a1')
+    expect(child?.title).toBe('child-cmd')
+    expect(child?.ownerSessionId).toBe('A1')
+    expect(child?.ownerLabel).toBe('A1 · 子任务')
+  })
+
+  it('子会话终端同样聚合且可跳转', () => {
+    const rows = buildProcessRows('A', processes, terminals, children, 'all')
+    const childTerminal = rows.find(row => row.processId === 'terminal:t-a1')
+    expect(childTerminal?.kind).toBe('terminal')
+    expect(childTerminal?.ownerSessionId).toBe('A1')
+    expect(childTerminal?.terminalId).toBe('t-a1')
+  })
+
+  it('active 筛选只保留 running（含子会话）', () => {
+    const procs = new Map(processes)
+    procs.set('A1', [makeProcess({ processId: 'p-a1', sessionId: 'A1', status: 'exited', exitCode: 1, endedAt: 9 })])
+    const rows = buildProcessRows('A', procs, terminals, children, 'active')
+    expect(rows.some(row => row.processId === 'p-a1')).toBe(false)
+    expect(rows.some(row => row.processId === 'p-a')).toBe(true)
+    expect(rows.some(row => row.processId === 'terminal:t-a')).toBe(true)
+  })
+
+  it('无子会话时行为不变', () => {
+    const rows = buildProcessRows('A', processes, terminals, [], 'all')
+    expect(rows).toHaveLength(2)
+    expect(rows.every(row => row.ownerSessionId === 'A')).toBe(true)
   })
 })

@@ -92,7 +92,7 @@ Agent 在会话中执行命令时，存在两类真实的进程形态，但都�
 
 - FR6.1 进程数据按 sessionId 隔离存储（与 `agentTerminalTabsAtom` 的 Map 形态一致）。
 - FR6.2 切换会话时，面板内容与徽标数量跟随切换。
-- FR6.3 协作子会话（delegation / exploration）的进程归属其子会话自身，不出现在父会话面板中。
+- FR6.3 协作子会话（delegation / exploration）的进程聚合进父会话面板，行内带来源标识（ownerLabel）；终止与输出读取按来源会话路由。（2026-08-28 修订：原为严格隔离，用户实测后反转为聚合，见 v2）
 
 ## 6. 交互与 UI 要求
 

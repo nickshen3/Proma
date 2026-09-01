@@ -1598,6 +1598,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     ) : paneTab === 'processes' ? (
       <ProcessesPanel
         sessionId={sessionId}
+        childSessions={[
+          ...sideDelegationSessionIds.flatMap((childSessionId) => {
+            const child = sessions.find(
+              (item) => item.id === childSessionId && item.parentSessionId === sessionId && !!item.sourceDelegationId,
+            )
+            return child ? [{ sessionId: child.id, label: getDelegationTabLabel(child.title) }] : []
+          }),
+          ...sideTemporaryAgents.map((branch) => ({
+            sessionId: branch.sessionId,
+            label: sessions.find((item) => item.id === branch.sessionId)?.title || '探索分支',
+          })),
+        ]}
         onOpenTerminalTab={(terminalId) => onTabChange(getTerminalSidePanelTab(terminalId))}
       />
     ) : paneTab === 'changes' ? (
