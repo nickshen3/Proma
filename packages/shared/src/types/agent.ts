@@ -2089,6 +2089,8 @@ export interface SessionProcessInfo {
   kind: SessionProcessKind
   /** 列表显示名：命令摘要（超长截断 ellipsis）或终端标题。 */
   title: string
+  /** 完整命令行；仅命令进程提供（终端无）。详情视图优先显示此字段。 */
+  fullCommand?: string
   status: SessionProcessStatus
   /** 启动时间（epoch ms）。 */
   startedAt: number

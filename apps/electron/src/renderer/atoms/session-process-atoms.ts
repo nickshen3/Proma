@@ -17,6 +17,8 @@ export interface ProcessRow {
   endedAt?: number
   pid?: number
   exitCode?: number
+  /** 完整命令行；详情视图优先显示（title 为截断摘要）。 */
+  fullCommand?: string
   terminalId?: string
   /** 该行所属的会话（kill / 输出读取按此路由；子会话行≠当前面板会话）。 */
   ownerSessionId: string
@@ -67,6 +69,7 @@ export function buildProcessRows(
         ...(row.endedAt !== undefined ? { endedAt: row.endedAt } : {}),
         ...(row.pid !== undefined ? { pid: row.pid } : {}),
         ...(row.exitCode !== undefined ? { exitCode: row.exitCode } : {}),
+        ...(row.fullCommand !== undefined ? { fullCommand: row.fullCommand } : {}),
         ownerSessionId: sessionId,
         ...(ownerLabel ? { ownerLabel } : {}),
       })

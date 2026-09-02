@@ -52,6 +52,15 @@ describe('summarizeCommand', () => {
 })
 
 describe('CommandProcessTracker', () => {
+  it('handleSpawn 登记时保留完整命令与摘要标题', () => {
+    const { registry, tracker } = makeTracker()
+    const longCommand = `echo ${'x'.repeat(200)}`
+    tracker.handleSpawn(makeFakeChild(), { command: longCommand, cwd: 'D:/x', toolCallId: 'tc-full' })
+    const [row] = registry.list('s1')
+    expect(row?.title).toHaveLength(80)
+    expect(row?.fullCommand).toBe(longCommand)
+  })
+
   it('handleSpawn 登记 running 记录并推送 registered 事件', () => {
     const { registry, events, tracker } = makeTracker()
     const child = makeFakeChild(111)

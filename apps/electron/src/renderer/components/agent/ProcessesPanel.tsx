@@ -125,6 +125,7 @@ export function ProcessesPanel({ sessionId, childSessions = [], onOpenTerminalTa
           sessionId={selected.ownerSessionId}
           processId={selected.processId}
           title={selected.title}
+          fullCommand={selected.fullCommand}
           pid={selected.pid}
         />
       )}
@@ -163,7 +164,7 @@ function ProcessRowItem({ row, selected, confirming, onSelect, onKillRequest, on
         )}
       >
         <Circle className={cn('size-2 shrink-0 fill-current', meta.className)} />
-        <span className="min-w-0 flex-1 truncate" title={row.title}>
+        <span className="min-w-0 flex-1 truncate" title={row.fullCommand ?? row.title}>
           {row.title}
           {row.ownerLabel && (
             <span className="ml-1.5 rounded bg-muted px-1 py-px align-middle text-[10px] text-muted-foreground">{row.ownerLabel}</span>
@@ -228,11 +229,12 @@ interface ProcessOutputViewProps {
   sessionId: string
   processId: string
   title: string
+  fullCommand?: string
   pid?: number
 }
 
 /** 命令进程输出视图：展开时全量拉取，随后经事件流增量追加，默认跟随尾部。 */
-function ProcessOutputView({ sessionId, processId, title, pid }: ProcessOutputViewProps): React.ReactElement {
+function ProcessOutputView({ sessionId, processId, title, fullCommand, pid }: ProcessOutputViewProps): React.ReactElement {
   const [text, setText] = React.useState('')
   const [follow, setFollow] = React.useState(true)
   const offsetRef = React.useRef(0)
@@ -268,7 +270,7 @@ function ProcessOutputView({ sessionId, processId, title, pid }: ProcessOutputVi
     <div className="flex min-h-0 flex-1 flex-col border-t">
       <div className="flex items-start justify-between gap-2 px-3 py-1">
         <span className="min-w-0 flex-1 break-all text-[11px] leading-4 text-muted-foreground">
-          {title}
+          {fullCommand ?? title}
           {pid !== undefined ? ` · PID ${pid}` : ''}
         </span>
         <button

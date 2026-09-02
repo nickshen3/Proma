@@ -124,6 +124,7 @@ export class CommandProcessTracker {
       sessionId: this.options.sessionId,
       kind: 'command',
       title: summarizeCommand(context.command),
+      fullCommand: context.command,
       status: 'running',
       startedAt: now,
       ...(child.pid !== undefined ? { pid: child.pid } : {}),
