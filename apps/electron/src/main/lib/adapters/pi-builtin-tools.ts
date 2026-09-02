@@ -41,6 +41,7 @@ import { fetchInstallerManifest, findInstallerSource } from '../installer-manife
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { buildPiNanoBananaTools } from '../chat-tools/nano-banana-mcp'
+import { buildTerminalExecuteResultPayload } from '../terminal-tool-result'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
 import {
   listTodos,
@@ -1326,6 +1327,7 @@ function buildAgentTerminalTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
   // 无用户在场的来源不能启动或驱动本地交互终端；这既没有可见性，也会扩大自动任务与外部 Bridge 的权限。
   if (ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation' || ctx.triggeredBy === 'external') return []
 
+
   const terminalInput = (args: Record<string, unknown>): { cwd?: string; title?: string } => ({
     ...(typeof args.cwd === 'string' && args.cwd.trim() ? { cwd: args.cwd.trim() } : {}),
     ...(typeof args.title === 'string' && args.title.trim() ? { title: args.title.trim() } : {}),
@@ -1377,13 +1379,7 @@ function buildAgentTerminalTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
         const wait = waitMs === undefined
           ? undefined
           : await waitForAgentTerminalCommand(ctx.sessionId, record.terminalId, waitMs)
-        return jsonToolResult({
-          terminal: record,
-          commandStarted: true,
-          reused: Boolean(terminalId),
-          outputSharedWithAgent: false,
-          ...(wait === undefined ? {} : { wait }),
-        })
+        return jsonToolResult(buildTerminalExecuteResultPayload({ terminal: record, reused: Boolean(terminalId), wait }))
       },
     }),
     sdk.defineTool({
