@@ -174,9 +174,9 @@ function ProcessRowItem({ row, selected, confirming, onSelect, onKillRequest, on
             ? '终端'
             : row.status === 'running'
               ? formatDuration(row.startedAt)
-              : row.status === 'exited' && row.exitCode !== undefined
-                ? `退出码 ${row.exitCode}`
-                : meta.label}
+              : `${formatDuration(row.startedAt, row.endedAt)} · ${
+                  row.status === 'exited' && row.exitCode !== undefined ? `退出码 ${row.exitCode}` : meta.label
+                }`}
         </span>
         {row.status === 'running' && (
           confirming ? (

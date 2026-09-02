@@ -14,6 +14,7 @@ export interface ProcessRow {
   title: string
   status: 'running' | 'exited' | 'killed'
   startedAt: number
+  endedAt?: number
   pid?: number
   exitCode?: number
   terminalId?: string
@@ -63,6 +64,7 @@ export function buildProcessRows(
         title: row.title,
         status: row.status,
         startedAt: row.startedAt,
+        ...(row.endedAt !== undefined ? { endedAt: row.endedAt } : {}),
         ...(row.pid !== undefined ? { pid: row.pid } : {}),
         ...(row.exitCode !== undefined ? { exitCode: row.exitCode } : {}),
         ownerSessionId: sessionId,

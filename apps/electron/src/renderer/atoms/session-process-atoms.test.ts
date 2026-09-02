@@ -104,6 +104,14 @@ describe('buildProcessRows（父会话聚合子会话进程）', () => {
     expect(rows.some(row => row.processId === 'terminal:t-a')).toBe(true)
   })
 
+  it('命令行合成时保留 endedAt（供耗时展示）', () => {
+    const procs = new Map<string, SessionProcessInfo[]>([
+      ['A', [makeProcess({ processId: 'p-done', status: 'exited', exitCode: 0, startedAt: 100, endedAt: 350 })]],
+    ])
+    const rows = buildProcessRows('A', procs, new Map(), [], 'all')
+    expect(rows[0]?.endedAt).toBe(350)
+  })
+
   it('无子会话时行为不变', () => {
     const rows = buildProcessRows('A', processes, terminals, [], 'all')
     expect(rows).toHaveLength(2)
