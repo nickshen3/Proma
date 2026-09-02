@@ -266,14 +266,14 @@ function ProcessOutputView({ sessionId, processId, title, pid }: ProcessOutputVi
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-t">
-      <div className="flex items-center justify-between px-3 py-1">
-        <span className="text-[11px] text-muted-foreground">
+      <div className="flex items-start justify-between gap-2 px-3 py-1">
+        <span className="min-w-0 flex-1 break-all text-[11px] leading-4 text-muted-foreground">
           {title}
           {pid !== undefined ? ` · PID ${pid}` : ''}
         </span>
         <button
           type="button"
-          className={cn('rounded px-1.5 py-0.5 text-[11px] hover:bg-muted', follow ? 'text-foreground' : 'text-muted-foreground')}
+          className={cn('shrink-0 rounded px-1.5 py-0.5 text-[11px] hover:bg-muted', follow ? 'text-foreground' : 'text-muted-foreground')}
           onClick={() => setFollow(value => !value)}
         >
           {follow ? '跟随中' : '已暂停'}
