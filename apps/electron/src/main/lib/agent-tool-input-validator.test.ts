@@ -17,6 +17,10 @@ describe('validateBashPrefixSleep', () => {
     expect(failure?.behavior).toBe('deny')
     expect(failure?.message).toContain('~570s')
     expect(failure?.message).toContain('Do not use Bash as a timer')
+    // 引导必须是条件驱动模板，而不是教模型拼固定时长的采样循环。
+    expect(failure?.message).toContain('gh pr watch')
+    expect(failure?.message).toContain('break')
+    expect(failure?.message).toContain('WaitFor')
   })
 
   test('拦截 &&、换行与纯 sleep 三种前缀形态', () => {
@@ -61,5 +65,14 @@ describe('validateToolInput 接入', () => {
     expect(failure?.behavior).toBe('deny')
     expect(failure?.message).toContain('missing required parameter')
     expect(validateToolInput('TerminalExecute', { command: 'echo hi' })).toBeNull()
+  })
+
+  test('WaitFor：必填 command，且检查命令以前缀 sleep 开头会被引导纠正', () => {
+    expect(validateToolInput('WaitFor', {})?.behavior).toBe('deny')
+    const failure = validateToolInput('WaitFor', { command: 'sleep 120; gh pr view 42' })
+    expect(failure?.behavior).toBe('deny')
+    expect(failure?.message).toContain('A check must exit 0 exactly when the condition is satisfied')
+    // 正常条件检查命令放行（含短 sleep 与循环内的合理轮询）。
+    expect(validateToolInput('WaitFor', { command: 'gh pr view 42 --json state -q .state | grep -q MERGED' })).toBeNull()
   })
 })

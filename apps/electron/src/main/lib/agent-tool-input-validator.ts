@@ -17,6 +17,7 @@ export const TOOL_REQUIRED_PARAMS: ReadonlyMap<string, ReadonlyArray<string>> = 
   ['TerminalWait', ['terminalId']],
   ['TerminalInterrupt', ['terminalId']],
   ['TerminalClose', ['terminalId']],
+  ['WaitFor', ['command']],
 ])
 
 /** Bash 前缀长 sleep 的拦截阈值（秒）：达到即视为把 Bash 当定时器使用。 */
@@ -58,10 +59,21 @@ export function validateToolInput(
 
   // Bash 前缀分钟级 sleep 是“把同步工具当定时器”的反模式：一次调用被空转占用数分钟
   // （真实案例：子 Agent 用 sleep 570 + timeout 600 凑十分钟轮询间隔，八小时空转上百次）。
-  // 与工具名大小写无关地拦截，并引导改用短间隔自查、阻塞式子命令或 Proma 定时任务。
+  // 与工具名大小写无关地拦截，并引导改用条件驱动等待。
   if (toolName === 'bash' || toolName === 'Bash') {
     const command = typeof input.command === 'string' ? input.command : ''
     return validateBashPrefixSleep(command)
+  }
+  // WaitFor 的检查命令以前缀 sleep 开头同样没有意义：检查应在条件满足时退出 0。
+  if (toolName === 'WaitFor') {
+    const command = typeof input.command === 'string' ? input.command : ''
+    const failure = validateBashPrefixSleep(command)
+    if (failure) {
+      return {
+        behavior: 'deny' as const,
+        message: 'WaitFor check command starts with a sleep. A check must exit 0 exactly when the condition is satisfied; a leading sleep only delays every poll. Provide a real condition check instead.',
+      }
+    }
   }
   return null
 }
@@ -92,6 +104,6 @@ export function validateBashPrefixSleep(command: string): ToolValidationFailure 
   const seconds = Math.round(totalSeconds)
   return {
     behavior: 'deny' as const,
-    message: `Bash command starts with a sleep of ~${seconds}s. Do not use Bash as a timer: it blocks one tool call for the whole delay. Instead, re-issue short checks yourself as needed, poll with short sleeps inside loops, use a blocking subcommand for state changes (e.g. gh pr watch), or schedule recurring checks as a Proma automation.`,
+    message: `Bash command starts with a sleep of ~${seconds}s. Do not use Bash as a timer: it blocks one tool call for the whole delay. Wait on the condition, not the clock: prefer a command that exits when the state changes (e.g. gh pr watch <n> --interval 15), a conditional loop that breaks on success (for i in $(seq 1 60); do <check> && break; sleep 10; done), the WaitFor tool (server-side polling that wakes you when the check passes), or a Proma automation for recurring checks.`,
   }
 }

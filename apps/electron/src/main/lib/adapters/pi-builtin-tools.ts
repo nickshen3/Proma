@@ -42,6 +42,8 @@ import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { buildPiNanoBananaTools } from '../chat-tools/nano-banana-mcp'
 import { buildTerminalExecuteResultPayload } from '../terminal-tool-result'
+import { waitForCondition } from '../agent-wait-service'
+import { resolveAgentTerminalCwd } from '../terminal-agent-policy'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
 import {
   listTodos,
@@ -1323,6 +1325,40 @@ function buildAgentWorktreeTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDe
   })] as ToolDefinition[]
 }
 
+function buildAgentWaitTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  return [sdk.defineTool({
+    name: 'WaitFor',
+    label: '条件等待',
+    description: 'Wait until a short check command exits with code 0, polled server-side at intervalSeconds without occupying your turns or Bash timeouts. Returns satisfied (with the last check output) once the condition is met, or timeout after timeoutMs. Use it to wait for external state changes — a PR merging, CI finishing, a port becoming ready, a file appearing — instead of sleeping inside Bash.',
+    promptSnippet: 'When you need to wait for an external state change, call WaitFor with a fast read-only check command (exit 0 = satisfied) instead of sleeping in Bash or re-polling yourself. Keep each check under a few seconds and side-effect free.',
+    parameters: Type.Object({
+      command: Type.String({ description: 'Check command; exit code 0 means satisfied. Keep it fast (<10s), read-only, and side-effect free. Do not prefix it with sleep.' }),
+      cwd: Type.Optional(Type.String({ description: 'Absolute or Agent-CWD-relative directory within the current authorized roots. Omit to run in the process cwd.' })),
+      intervalSeconds: Type.Optional(Type.Number({ description: 'Seconds between checks, clamped to 1-300. Defaults to 15.' })),
+      timeoutMs: Type.Optional(Type.Number({ description: 'Maximum total wait in milliseconds, clamped to 1000-7200000 (2 hours). Defaults to 600000 (10 minutes).' })),
+    }),
+    async execute(_toolCallId, params) {
+      const args = params as Record<string, unknown>
+      const command = typeof args.command === 'string' ? args.command.trim() : ''
+      if (!command) throw new Error('command 必填')
+      const requestedCwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : undefined
+      const cwd = requestedCwd
+        ? resolveAgentTerminalCwd({ cwd: requestedCwd, agentCwd: ctx.agentCwd, allowedRoots: ctx.allowedRoots })
+        : undefined
+      const intervalSeconds = typeof args.intervalSeconds === 'number' && Number.isFinite(args.intervalSeconds) ? args.intervalSeconds : undefined
+      const timeoutMs = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) ? args.timeoutMs : undefined
+      const result = await waitForCondition({
+        sessionId: ctx.sessionId,
+        command,
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(intervalSeconds === undefined ? {} : { intervalSeconds }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      })
+      return jsonToolResult(result)
+    },
+  })] as ToolDefinition[]
+}
+
 function buildAgentTerminalTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   // 无用户在场的来源不能启动或驱动本地交互终端；这既没有可见性，也会扩大自动任务与外部 Bridge 的权限。
   if (ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation' || ctx.triggeredBy === 'external') return []
@@ -1549,6 +1585,14 @@ export async function buildPiBuiltinTools(
     tools.push(...buildAgentTerminalTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入 Agent 终端工具失败:', error)
+  }
+
+  // 条件等待对所有触发来源开放：子 Agent 与自动任务同样需要事件驱动的状态等待，
+  // 这正是“用 sleep 凑间隔”反模式的根治手段。检查命令仍受参数校验与权限模式约束。
+  try {
+    tools.push(...buildAgentWaitTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入条件等待工具失败:', error)
   }
 
   // Pi-native 受管浏览器不经过 MCP：网页 WebContents 和 CDP 永远停留在主进程。

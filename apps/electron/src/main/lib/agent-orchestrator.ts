@@ -1404,6 +1404,14 @@ export class AgentOrchestrator {
               }
               return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
             }
+            // 条件等待：检查命令只读时允许（计划阶段可等待调研相关状态），否则拒绝。
+            if (toolName === 'WaitFor') {
+              const command = typeof input.command === 'string' ? input.command : ''
+              if (isBashCommandReadOnly(command)) {
+                return { behavior: 'allow' as const, updatedInput: input }
+              }
+              return { behavior: 'deny' as const, message: '计划模式下只能等待只读检查命令，请在计划审批通过后再执行。' }
+            }
             if (toolName.startsWith('mcp__planning__')) {
               return PLAN_MODE_READ_ONLY_PLANNING_TOOLS.has(toolName)
                 ? { behavior: 'allow' as const, updatedInput: input }
