@@ -20,6 +20,7 @@ import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems } from './ProcessBlockGroup'
+import { buildProcessGroupTranscript, collectToolResults } from './process-group-transcript'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @proma/session-core 作为唯一真源。
@@ -470,6 +471,12 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     })
   }, [topLevelBlocks, isStreaming])
 
+  // 工具结果按 tool_use_id 全局配对（含跨 turn），供执行过程复制按钮构建完整转录。
+  const toolResultsMap = React.useMemo(
+    () => collectToolResults(allMessages),
+    [allMessages]
+  )
+
   // 本轮「文件名 → 绝对路径」映射：与 footer chips 同源，供正文内联文件引用补全裸文件名
   const turnFileMap = React.useMemo(
     () => buildTurnFileNameMap(turn.turnMessages),
@@ -553,6 +560,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                   </React.Fragment>
                 ))}
                 isMessageTail={itemIndex === renderItems.length - 1}
+                buildCopyContent={() => buildProcessGroupTranscript(groupBlocks, toolResultsMap)}
               />
             )
           })}

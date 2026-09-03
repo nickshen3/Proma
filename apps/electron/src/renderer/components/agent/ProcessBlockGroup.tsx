@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { ChevronRight } from 'lucide-react'
+import { CheckIcon, ChevronRight, CopyIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { getToolDisplayName, getToolIcon } from './tool-utils'
 import type {
   SDKContentBlock,
@@ -17,6 +18,8 @@ interface ProcessBlockGroupProps {
   // 该过程组是否为整条消息的末尾项：是则流式中保留最后一段为正常显示，
   // 否则（最终答案已作为后续兄弟块外置）整组统一弱化。
   isMessageTail?: boolean
+  /** 惰性构建可复制的执行过程详细转录；点击时才求值，流式中也能复制最新内容。未提供则不显示复制按钮。 */
+  buildCopyContent?: () => string
 }
 
 const MAX_PROCESS_GROUP_ICONS = 4
@@ -192,11 +195,12 @@ const StableProcessChild = React.memo(
   (previous, next) => previous.child === next.child,
 )
 
-export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessageTail = false }: ProcessBlockGroupProps): React.ReactElement {
+export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessageTail = false, buildCopyContent }: ProcessBlockGroupProps): React.ReactElement {
   const initialDisplayMode: ProcessGroupDisplayMode = !isStreaming
     ? 'collapsed'
     : 'expanded'
   const [displayMode, setDisplayMode] = React.useState<ProcessGroupDisplayMode>(initialDisplayMode)
+  const [copied, setCopied] = React.useState(false)
   const [shouldRenderContent, setShouldRenderContent] = React.useState(initialDisplayMode !== 'collapsed')
   const [keepProgressViewport, setKeepProgressViewport] = React.useState(!!isStreaming)
   const [collapseCountdown, setCollapseCountdown] = React.useState<number | null>(null)
@@ -392,6 +396,19 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
   const visibleToolNames = toolNames.slice(0, MAX_PROCESS_GROUP_ICONS)
   const hiddenToolCount = Math.max(0, toolNames.length - visibleToolNames.length)
 
+  const handleCopyProcess = React.useCallback(async (): Promise<void> => {
+    if (!buildCopyContent) return
+    try {
+      const content = buildCopyContent()
+      if (!content) return
+      await copyTextToClipboard(content)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      console.error('[ProcessBlockGroup] 复制执行过程失败:', error)
+    }
+  }, [buildCopyContent])
+
   // 只让最近几项参与高频更新；旧项保留在 DOM 中供用户滚动查看，但冻结其 React 子树。
   const renderContentChildren = (): React.ReactNode => {
     const childArray = React.Children.toArray(visibleChildren)
@@ -428,52 +445,74 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
 
   return (
     <div className="space-y-1.5">
-      <button
-        type="button"
-        className={cn(
-          'flex max-w-full items-center gap-2 py-0.5 text-left transition-opacity group',
-          'hover:opacity-70',
-        )}
-        onClick={() => {
-          userToggledRef.current = true
-          clearAutoCollapseTimers()
-          setCollapseCountdown(null)
-          if (!isStreaming) setKeepProgressViewport(false)
-          setDisplayMode((previous) => previous === 'collapsed' ? 'expanded' : 'collapsed')
-        }}
-      >
-        <ChevronRight
+      <div className="group flex max-w-full items-center gap-1">
+        <button
+          type="button"
           className={cn(
-            'size-3 shrink-0 text-muted-foreground/40 transition-transform duration-150',
-            isContentExpanded && 'rotate-90',
+            'flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-opacity',
+            'hover:opacity-70',
           )}
-        />
-        <span className="min-w-0 truncate text-[14px] text-muted-foreground">{summary}</span>
-        {collapseCountdown !== null && (
-          <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground/50">
-            （{collapseCountdown}）
-          </span>
-        )}
-        {visibleToolNames.length > 0 && (
-          <span className="flex shrink-0 items-center gap-1 text-muted-foreground/60">
-            {visibleToolNames.map((toolName) => {
-              const ToolIcon = getToolIcon(toolName)
-              return (
-                <ToolIcon
-                  key={toolName}
-                  className="size-3.5"
-                  aria-label={getToolDisplayName(toolName)}
-                />
-              )
-            })}
-            {hiddenToolCount > 0 && (
-              <span className="text-[11px] tabular-nums text-muted-foreground/60">
-                +{hiddenToolCount}
-              </span>
+          onClick={() => {
+            userToggledRef.current = true
+            clearAutoCollapseTimers()
+            setCollapseCountdown(null)
+            if (!isStreaming) setKeepProgressViewport(false)
+            setDisplayMode((previous) => previous === 'collapsed' ? 'expanded' : 'collapsed')
+          }}
+        >
+          <ChevronRight
+            className={cn(
+              'size-3 shrink-0 text-muted-foreground/40 transition-transform duration-150',
+              isContentExpanded && 'rotate-90',
             )}
-          </span>
+          />
+          <span className="min-w-0 truncate text-[14px] text-muted-foreground">{summary}</span>
+          {collapseCountdown !== null && (
+            <span className="shrink-0 text-[12px] tabular-nums text-muted-foreground/50">
+              （{collapseCountdown}）
+            </span>
+          )}
+          {visibleToolNames.length > 0 && (
+            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/60">
+              {visibleToolNames.map((toolName) => {
+                const ToolIcon = getToolIcon(toolName)
+                return (
+                  <ToolIcon
+                    key={toolName}
+                    className="size-3.5"
+                    aria-label={getToolDisplayName(toolName)}
+                  />
+                )
+              })}
+              {hiddenToolCount > 0 && (
+                <span className="text-[11px] tabular-nums text-muted-foreground/60">
+                  +{hiddenToolCount}
+                </span>
+              )}
+            </span>
+          )}
+        </button>
+        {buildCopyContent && (
+          <button
+            type="button"
+            className={cn(
+              'flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/60',
+              'transition-opacity hover:bg-accent/70 hover:text-foreground',
+              'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              copied && 'opacity-100 text-foreground',
+            )}
+            aria-label={copied ? '已复制执行过程' : '复制执行过程详细内容'}
+            title="复制执行过程详细内容"
+            onClick={handleCopyProcess}
+          >
+            {copied ? (
+              <CheckIcon className="size-3.5" />
+            ) : (
+              <CopyIcon className="size-3.5" />
+            )}
+          </button>
         )}
-      </button>
+      </div>
 
       {shouldRenderContent && (
         <div
