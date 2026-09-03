@@ -78,6 +78,34 @@ describe('waitForCondition', () => {
     const result = await waiting
     expect(result.status).toBe('cancelled')
   })
+
+  test('中止信号：abortSignal 触发时立即收尾并停止后续轮询', async () => {
+    const controller = new AbortController()
+    const waiting = waitForCondition({
+      sessionId: 'wait-abort',
+      command: 'process.exit(1)',
+      shell,
+      intervalSeconds: 1,
+      timeoutMs: 60_000,
+      abortSignal: controller.signal,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    controller.abort()
+    const result = await waiting
+    expect(result.status).toBe('cancelled')
+  })
+
+  test('中止信号已触发时直接取消，不执行任何检查', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const result = await waitForCondition({
+      sessionId: 'wait-aborted',
+      command: 'process.exit(0)',
+      shell,
+      abortSignal: controller.signal,
+    })
+    expect(result.status).toBe('cancelled')
+  })
 })
 
 describe('waitForCondition 参数归一', () => {

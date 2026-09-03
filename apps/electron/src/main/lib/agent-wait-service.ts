@@ -21,6 +21,8 @@ export interface AgentWaitInput {
   timeoutMs?: number
   /** 测试注入的执行器；缺省按平台探测 shell。 */
   shell?: ShellPlan
+  /** 中止信号：runtime 取消（会话停止/请求捱线）时立即结束轮询并返回 cancelled。 */
+  abortSignal?: AbortSignal
 }
 
 export type AgentWaitResult =
@@ -76,8 +78,20 @@ export async function waitForCondition(input: AgentWaitInput): Promise<AgentWait
       activeWaits.delete(waitId)
       if (waitTimer) clearTimeout(waitTimer)
       if (deadlineTimer) clearTimeout(deadlineTimer)
+      input.abortSignal?.removeEventListener('abort', onAbort)
       resolve(result)
     }
+
+    // runtime 取消（会话停止/通道捱线）时立即收尾，不再占用轮询。
+    const onAbort = (): void => {
+      cancelled = true
+      finish({ status: 'cancelled', checks, elapsedMs: Date.now() - startedAt })
+    }
+    if (input.abortSignal?.aborted) {
+      onAbort()
+      return
+    }
+    input.abortSignal?.addEventListener('abort', onAbort)
 
     activeWaits.set(waitId, { sessionId: input.sessionId, finish })
 

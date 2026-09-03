@@ -1368,15 +1368,15 @@ function buildAgentWaitTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefini
   return [sdk.defineTool({
     name: 'WaitFor',
     label: '条件等待',
-    description: 'Wait until a short check command exits with code 0, polled server-side at intervalSeconds without occupying your turns or Bash timeouts. Returns satisfied (with the last check output) once the condition is met, or timeout after timeoutMs. Use it to wait for external state changes — a PR merging, CI finishing, a port becoming ready, a file appearing — instead of sleeping inside Bash.',
-    promptSnippet: 'When you need to wait for an external state change, call WaitFor with a fast read-only check command (exit 0 = satisfied) instead of sleeping in Bash or re-polling yourself. Keep each check under a few seconds and side-effect free.',
+    description: 'Wait until a short check command exits with code 0, polled server-side at intervalSeconds without occupying your turns or Bash timeouts. Returns satisfied (with the last check output) once the condition is met, or timeout after timeoutMs. Use it to wait for external state changes — a PR merging, CI finishing, a port becoming ready, a file appearing — instead of sleeping inside Bash. Exit-code contract: the command must exit 0 if and only if the condition holds; failure paths must not exit 0. Prefer the tool\'s native exit code (e.g. bare gh pr checks: 0 = all passed, 1 = failed, 8 = pending) over grep pipelines, which return the LAST command\'s status and easily produce false satisfaction.',
+    promptSnippet: 'When you need to wait for an external state change, call WaitFor with a fast read-only check command whose exit code is 0 exactly when the condition holds — prefer native exit codes (bare gh pr checks) over grep pipelines. Never make failure paths exit 0. Keep each check under a few seconds and side-effect free.',
     parameters: Type.Object({
       command: Type.String({ description: 'Check command; exit code 0 means satisfied. Keep it fast (<10s), read-only, and side-effect free. Do not prefix it with sleep.' }),
       cwd: Type.Optional(Type.String({ description: 'Absolute or Agent-CWD-relative directory within the current authorized roots. Omit to run in the process cwd.' })),
       intervalSeconds: Type.Optional(Type.Number({ description: 'Seconds between checks, clamped to 1-300. Defaults to 15.' })),
       timeoutMs: Type.Optional(Type.Number({ description: 'Maximum total wait in milliseconds, clamped to 1000-7200000 (2 hours). Defaults to 600000 (10 minutes).' })),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, signal) {
       const args = params as Record<string, unknown>
       const command = typeof args.command === 'string' ? args.command.trim() : ''
       if (!command) throw new Error('command 必填')
@@ -1392,6 +1392,7 @@ function buildAgentWaitTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefini
         ...(cwd === undefined ? {} : { cwd }),
         ...(intervalSeconds === undefined ? {} : { intervalSeconds }),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(signal === undefined ? {} : { abortSignal: signal }),
       })
       return jsonToolResult(result)
     },
