@@ -17,6 +17,7 @@ const record: AgentTerminalRecord = {
   terminalId: 'terminal-1',
   title: 'Agent 终端',
   cwd: 'D:\\workspace',
+  profile: 'bash',
   status: 'running',
   command: { mode: 'interactive', startedAt: 1_000, finished: false },
 }

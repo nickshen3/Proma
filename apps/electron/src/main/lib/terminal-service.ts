@@ -7,9 +7,12 @@ import {
   type AgentTerminalCloseEvent,
   type AgentTerminalOpenEvent,
   type CommandMarkerHit,
+  assertTerminalProfileSupported,
+  parseTerminalProfile,
   type TerminalCreateInput,
   type TerminalInput,
   type TerminalOutputAck,
+  type TerminalProfile,
   type TerminalResizeInput,
   type TerminalShellKind,
   type TerminalSnapshot,
@@ -45,6 +48,7 @@ export interface AgentTerminalRecord {
   terminalId: string
   title: string
   cwd: string
+  profile: TerminalProfile
   status: 'running' | 'exited'
   exitCode?: number
   /** 最近一次 TerminalExecute 命令的结束信号状态；纯交互终端无该字段。 */
@@ -177,32 +181,53 @@ export function killTerminal(terminalId: string): void {
   terminalRuntimeClient.kill(terminalId)
 }
 
-/** 为 Agent 创建其会话归属的可见终端，目录仍受现有文件授权范围限制。 */
+/** 为 Agent 创建其会话归属的可见终端，目录仍受现有文件授权范围限制；profile 决定交互 shell。 */
 export async function openAgentTerminal(input: {
   sessionId: string
   cwd?: string
   title?: string
+  profile?: unknown
+  /** 仅用于未显式指定的 Windows 历史 profile；创建失败时安全回退到 default。 */
+  fallbackToDefaultProfile?: boolean
   agentCwd?: string
   allowedRoots?: string[]
   /** 提供时创建一次性命令终端：命令结束即 shell 退出，产生精确 exit 信号。 */
   command?: string
 }): Promise<AgentTerminalRecord> {
   const cwd = resolveAgentTerminalCwd(input)
+  const profile = assertTerminalProfileSupported(parseTerminalProfile(input.profile), process.platform)
   const terminalId = randomUUID()
   const title = input.title?.trim().slice(0, 80) || 'Agent 终端'
-  await createTerminal({
-    terminalId,
-    sessionId: input.sessionId,
-    cwd,
-    cols: 80,
-    rows: 24,
-    ...(input.command === undefined ? {} : { command: input.command }),
-  }, { strictCwd: true })
+  let resolvedProfile = profile
+  try {
+    await createTerminal({
+      terminalId,
+      sessionId: input.sessionId,
+      cwd,
+      profile: resolvedProfile,
+      cols: 80,
+      rows: 24,
+      ...(input.command === undefined ? {} : { command: input.command }),
+    }, { strictCwd: true })
+  } catch (error) {
+    // 一次性命令终端依赖显式 shell 语义，失败时直接报错；仅交互终端安全回退到 default。
+    if (!input.fallbackToDefaultProfile || profile === 'default' || input.command !== undefined) throw error
+    resolvedProfile = 'default'
+    await createTerminal({
+      terminalId,
+      sessionId: input.sessionId,
+      cwd,
+      profile: resolvedProfile,
+      cols: 80,
+      rows: 24,
+    }, { strictCwd: true })
+  }
   const record: AgentTerminalRecord = {
     sessionId: input.sessionId,
     terminalId,
     title,
     cwd,
+    profile: resolvedProfile,
     status: 'running',
     ...(input.command === undefined ? {} : { command: { mode: 'oneshot', startedAt: Date.now(), finished: false } }),
   }
@@ -225,6 +250,10 @@ export async function executeAgentTerminal(input: {
   command: string
   /** 指定时复用当前 Agent 会话中仍在运行的可见 PTY；省略时创建新终端。 */
   terminalId?: string
+  /** 仅在创建新终端时生效；复用已有终端时必须与其 profile 一致。 */
+  profile?: unknown
+  /** 仅在新建终端且使用 Windows 历史 profile 时生效。 */
+  fallbackToDefaultProfile?: boolean
   cwd?: string
   title?: string
   agentCwd?: string
@@ -235,11 +264,16 @@ export async function executeAgentTerminal(input: {
   const command = input.command.trim()
   if (!command || command.length > 64 * 1024) throw new Error('终端命令为空或过长')
   const waitMs = normalizeWaitMs(input.waitMs)
+  const profile = assertTerminalProfileSupported(parseTerminalProfile(input.profile), process.platform)
+  const profileWasSpecified = input.profile !== undefined && input.profile !== null && input.profile !== ''
 
   const requestedTerminalId = input.terminalId?.trim()
   if (requestedTerminalId) {
     const record = getOwnedAgentTerminal(input.sessionId, requestedTerminalId)
     if (record.status !== 'running') throw new Error('终端已退出，不能复用')
+    if (profileWasSpecified && record.profile !== profile) {
+      throw new Error(`终端 ${requestedTerminalId} 运行在 ${record.profile}，不能以 ${profile} 复用；请省略 terminalId 另开新终端`)
+    }
     if (waitMs === undefined) {
       record.command = { mode: 'interactive', startedAt: Date.now(), finished: false }
       markerScanners.delete(record.terminalId)
@@ -264,6 +298,8 @@ export async function executeAgentTerminal(input: {
     title,
     agentCwd: input.agentCwd,
     allowedRoots: input.allowedRoots,
+    profile,
+    fallbackToDefaultProfile: input.fallbackToDefaultProfile,
   }
   if (waitMs !== undefined) {
     // 显式传 command，避免把 input 展开误作一次性命令语义的一部分。
@@ -383,6 +419,7 @@ function notifyAgentTerminalOpen(record: AgentTerminalRecord): void {
     terminalId: record.terminalId,
     title: record.title,
     cwd: record.cwd,
+    profile: record.profile,
   }
   getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_OPEN, event)
 }

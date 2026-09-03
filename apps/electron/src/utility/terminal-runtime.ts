@@ -1,6 +1,5 @@
 import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { spawn, type IPty } from 'node-pty'
 import {
   buildOneShotSpawnPlan,
@@ -14,9 +13,9 @@ import {
   type TerminalOutputEvent,
   type TerminalProfile,
   type TerminalResizeInput,
-  type TerminalShellKind,
   type TerminalState,
 } from '@proma/shared'
+import { resolveTerminalShell } from './terminal-shell-resolver'
 
 type MessagePortLike = {
   on(event: 'message', listener: (event: { data: unknown }) => void): void
@@ -120,8 +119,8 @@ function createTerminal(input: RuntimeTerminalCreateInput): void {
     return
   }
   const profile = isTerminalProfile(input.profile) ? input.profile : 'default'
-  const shell = resolveShell(profile, input.command)
   try {
+    const shell = resolveShell(profile, input.command)
     const cwd = getSafeCwd(input.cwd, input.strictCwd === true)
     const pty = spawn(shell.file, shell.args, {
       name: 'xterm-256color',
@@ -254,6 +253,15 @@ function normalizeDimension(value: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1
 }
 
+/** 从可执行文件路径推导 shell 家族；wsl 单列，仅在一次性 spawn 时需要特殊处理。 */
+function inferShellKind(file: string): OneShotShellKind {
+  const base = file.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  if (base === 'wsl.exe') return 'wsl'
+  if (base === 'cmd.exe') return 'cmd'
+  if (base === 'powershell.exe' || base === 'pwsh.exe') return 'powershell'
+  return 'posix'
+}
+
 interface ResolvedShell {
   file: string
   args: string[]
@@ -262,42 +270,20 @@ interface ResolvedShell {
   kind: OneShotShellKind
 }
 
+/** 基于上游 resolveTerminalShell 解析交互 shell，并为一次性命令生成精确退出信号的 spawn 计划。 */
 function resolveShell(profile: TerminalProfile, command?: string): ResolvedShell {
-  const interactive = resolveInteractiveShell(profile)
-  if (command === undefined) return interactive
+  const interactive = resolveTerminalShell(profile)
+  const kind = inferShellKind(interactive.file)
+  if (command === undefined) return { ...interactive, kind }
   // 一次性命令：让 shell 直接运行命令，命令结束即退出，从而产生精确的 exit 信号。
   const plan = buildOneShotSpawnPlan({
-    shellKind: interactive.kind,
+    shellKind: kind,
     platform: process.platform === 'win32' ? 'win32' : 'other',
     command,
     interactive: { file: interactive.file, args: interactive.args },
   })
-  return { ...interactive, file: plan.file, args: plan.args }
+  return { ...interactive, file: plan.file, args: plan.args, kind }
 }
-
-function resolveInteractiveShell(profile: TerminalProfile): ResolvedShell {
-  if (process.platform === 'darwin') {
-    const shell = profile === 'bash' ? '/bin/bash' : process.env.SHELL || '/bin/zsh'
-    return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal', kind: 'posix' }
-  }
-  if (process.platform === 'win32') return resolveWindowsShell(profile)
-  const shell = profile === 'zsh' ? '/bin/zsh' : process.env.SHELL || '/bin/bash'
-  return { file: shell, args: ['-l'], title: shell.split('/').pop() || 'Terminal', kind: 'posix' }
-}
-
-function resolveWindowsShell(profile: TerminalProfile): ResolvedShell {
-  const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
-  const gitBash = join(programFiles, 'Git', 'bin', 'bash.exe')
-  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  if (profile === 'wsl') return { file: 'wsl.exe', args: [], title: 'WSL', kind: 'wsl' }
-  if (profile === 'git-bash' && existsSync(gitBash)) return { file: gitBash, args: ['--login', '-i'], title: 'Git Bash', kind: 'posix' }
-  if (profile === 'cmd') return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt', kind: 'cmd' }
-  if (profile === 'pwsh' || profile === 'powershell') return { file: 'pwsh.exe', args: ['-NoLogo'], title: 'PowerShell', kind: 'powershell' }
-  // 默认使用系统 Windows PowerShell；PowerShell 7、Git Bash 与 WSL 由 profile 显式选择。
-  if (profile === 'default' && existsSync(powershell)) return { file: powershell, args: ['-NoLogo'], title: 'PowerShell', kind: 'powershell' }
-  return { file: process.env.ComSpec || 'cmd.exe', args: [], title: 'Command Prompt', kind: 'cmd' }
-}
-
 function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   if (!value || typeof value !== 'object') return false
   const request = value as { type?: unknown }

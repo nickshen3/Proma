@@ -48,11 +48,18 @@ export {
 export { normalizePathForCompare } from './normalize-path'
 export { isGitDiffStateFilePath } from './git-state-path'
 export {
+  MAX_NORMALIZED_SEARCH_QUERY_LENGTH,
+  MAX_SEARCH_QUERY_SOURCE_LENGTH,
   findBestSearchMatch,
+  findBestSearchMatchInNormalized,
+  normalizeSearchText,
+  createSearchSnippet,
   insertTopSearchResult,
   type SearchMatch,
   type SearchMatchKind,
+  type NormalizedSearchText,
   type SearchResultRank,
+  type SearchSnippet,
 } from './search-matching'
 export {
   AUTOMATION_OCCURRENCE_SAMPLES_PER_DAY,
