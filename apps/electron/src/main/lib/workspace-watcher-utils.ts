@@ -1,3 +1,5 @@
+import { isGitDiffStateFilePath } from '@proma/shared'
+
 // 高频变动目录：跳过依赖、缓存和构建中间物，防止产生 IPC 事件风暴。
 const HIGH_NOISE_SEGMENTS = new Set([
   'node_modules', '.next', '.nuxt', '.git', 'dist', 'build',
@@ -5,10 +7,6 @@ const HIGH_NOISE_SEGMENTS = new Set([
   '.venv', 'venv', '.tox', '.nox', '__pypackages__',
   '.pytest_cache', '.mypy_cache', '.ruff_cache', '.hypothesis',
   '.gradle',
-])
-
-const GIT_DIFF_STATE_FILES = new Set([
-  'HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'index',
 ])
 
 export function isHighNoisePath(normalizedPath: string): boolean {
@@ -23,16 +21,10 @@ export function normalizeWatchFilename(filename: string | Buffer | null): string
 }
 
 /**
- * 只有直接影响 `git diff HEAD` 结果的 Git 元数据才触发刷新。
- * 远端 fetch 产生的 FETCH_HEAD、refs/remotes 与 objects 均不在范围内，避免重现刷新循环。
+ * 只有直接影响 `git diff HEAD` 结果的 Git 元数据才触发刷新；实现见 @proma/shared 的
+ * isGitDiffStateFilePath（此处输入已归一为 `/` 分隔，两者分段语义一致）。
  */
-export function isGitDiffStatePath(normalizedPath: string): boolean {
-  const segments = normalizedPath.split('/').filter(Boolean)
-  const gitIndex = segments.lastIndexOf('.git')
-  if (gitIndex < 0) return false
-  const gitRelativePath = segments.slice(gitIndex + 1)
-  return gitRelativePath.length === 1 && GIT_DIFF_STATE_FILES.has(gitRelativePath[0]!)
-}
+export const isGitDiffStatePath = isGitDiffStateFilePath
 
 export function shouldNotifyForWatchFilename(filename: string | Buffer | null): boolean {
   const normalizedFilename = normalizeWatchFilename(filename)

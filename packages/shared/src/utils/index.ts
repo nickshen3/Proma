@@ -46,6 +46,7 @@ export {
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
+export { isGitDiffStateFilePath } from './git-state-path'
 export {
   findBestSearchMatch,
   insertTopSearchResult,

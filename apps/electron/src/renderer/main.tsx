@@ -73,7 +73,7 @@ import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, D
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { ArrowUpRight } from 'lucide-react'
-import { diffCapabilities } from '@proma/shared'
+import { diffCapabilities, isGitDiffStateFilePath } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
@@ -310,8 +310,16 @@ function AgentSettingsInitializer(): null {
 
       bumpCapabilities((v) => v + 1)
     })
-    const unsubFiles = window.electronAPI.onWorkspaceFilesChanged(() => {
-      bumpFiles((v) => v + 1)
+    const unsubFiles = window.electronAPI.onWorkspaceFilesChanged((changedPaths) => {
+      // 纯 Git 状态元数据（.git/index、HEAD 等）变化只影响 Git diff，不改变文件树；
+      // 跳过文件列表刷新，避免后台 Git 活动让文件面板（尤其空目录文案）反复重载闪烁。
+      // changedPaths 缺失或为空表示未知变更范围，保守起见仍然刷新。
+      const gitStateOnly = changedPaths !== undefined
+        && changedPaths.length > 0
+        && changedPaths.every((path) => isGitDiffStateFilePath(path))
+      if (!gitStateOnly) {
+        bumpFiles((v) => v + 1)
+      }
       // watcher 已在主进程失效命中的 repo cache；所有已挂载 Changes 面板由此重新拉取。
       bumpGitDiffRefresh((v) => v + 1)
       // 外部本地项目目录变动时，主进程在 LIST_WORKSPACES 中重新计算根目录状态。

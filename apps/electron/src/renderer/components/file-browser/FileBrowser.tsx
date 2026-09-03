@@ -208,13 +208,21 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
 
   const selectedCount = selectedPaths.size
 
-  /** 加载并合并所有可见根目录。 */
-  const loadRoot = React.useCallback(async () => {
+  /** 加载并合并所有可见根目录。
+   *
+   * 默认只在当前根组合首次加载时切换 loading：后续由 watcher/版本号触发的后台刷新
+   * 保持已有内容稳定，避免空目录时“目录为空”文案随 loading 反复显隐而闪烁。
+   * 用户主动刷新可传 forceLoading 保留按钮反馈。
+   */
+  const loadedRootsKeyRef = React.useRef<string | null>(null)
+  const loadRoot = React.useCallback(async (options?: { forceLoading?: boolean }) => {
     if (browserRoots.length === 0) {
       setEntries([])
       return
     }
-    setLoading(true)
+    const rootsKey = browserRoots.map((root) => `${root.scope}\u0000${root.path}`).join('\u0001')
+    const showLoading = options?.forceLoading === true || loadedRootsKeyRef.current !== rootsKey
+    if (showLoading) setLoading(true)
     setError(null)
     try {
       const groups = await Promise.all(browserRoots.map(async (root) => {
@@ -222,12 +230,13 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
         return items.map((entry): ScopedFileEntry => ({ ...entry, scope: root.scope, rootPath: root.path }))
       }))
       setEntries(sortEntries(groups.flat()))
+      loadedRootsKeyRef.current = rootsKey
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       setError(msg)
       setEntries([])
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }, [browserRoots, access])
 
@@ -456,7 +465,7 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
             variant="ghost"
             size="icon"
             className="h-7 w-7 flex-shrink-0"
-            onClick={loadRoot}
+            onClick={() => { void loadRoot({ forceLoading: true }) }}
             disabled={loading}
           >
             <RotateCw className={cn('size-3.5', loading && 'animate-spin')} />
