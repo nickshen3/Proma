@@ -20,8 +20,8 @@ export const TOOL_REQUIRED_PARAMS: ReadonlyMap<string, ReadonlyArray<string>> = 
   ['WaitFor', ['command']],
 ])
 
-/** Bash 前缀长 sleep 的拦截阈值（秒）：达到即视为把 Bash 当定时器使用。 */
-const BASH_PREFIX_SLEEP_DENY_SECONDS = 60
+/** Bash 独立 sleep 语句的拦截阈值（秒）：达到即视为把同步工具当定时器使用。 */
+const BASH_SLEEP_STATEMENT_DENY_SECONDS = 60
 
 /** 校验失败结果，与 PermissionResult deny 形状一致 */
 export interface ToolValidationFailure {
@@ -57,53 +57,62 @@ export function validateToolInput(
     }
   }
 
-  // Bash 前缀分钟级 sleep 是“把同步工具当定时器”的反模式：一次调用被空转占用数分钟
+  // Bash 独立分钟级 sleep 是“把同步工具当定时器”的反模式：一次调用被空转占用数分钟
   // （真实案例：子 Agent 用 sleep 570 + timeout 600 凑十分钟轮询间隔，八小时空转上百次）。
   // 与工具名大小写无关地拦截，并引导改用条件驱动等待。
   if (toolName === 'bash' || toolName === 'Bash') {
     const command = typeof input.command === 'string' ? input.command : ''
-    return validateBashPrefixSleep(command)
+    return validateBashLongSleepStatement(command)
   }
-  // WaitFor 的检查命令以前缀 sleep 开头同样没有意义：检查应在条件满足时退出 0。
+  // WaitFor 的检查命令包含分钟级独立 sleep 同样没有意义：检查应在条件满足时退出 0。
   if (toolName === 'WaitFor') {
     const command = typeof input.command === 'string' ? input.command : ''
-    const failure = validateBashPrefixSleep(command)
+    const failure = validateBashLongSleepStatement(command)
     if (failure) {
       return {
         behavior: 'deny' as const,
-        message: 'WaitFor check command starts with a sleep. A check must exit 0 exactly when the condition is satisfied; a leading sleep only delays every poll. Provide a real condition check instead.',
+        message: 'WaitFor check command contains a standalone sleep of a minute or more. A check must exit 0 exactly when the condition is satisfied; sleeping inside it only delays every poll. Provide a real condition check instead.',
       }
     }
   }
   return null
 }
 
-/** GNU sleep 支持多参数相加与 s/m/h/d 后缀；仅匹配命令开头的 sleep 段。 */
-const BASH_PREFIX_SLEEP_PATTERN = /^sleep((?:\s+[0-9]+(?:\.[0-9]+)?[smhdSMHD]?)+)/
-
 /**
- * 拦截以分钟级 sleep 开头的 Bash 命令。低于阈值、非前缀（如循环体内的短 sleep）
- * 或仅提及 sleep 字样但不以它开头的命令一律放行，保持低误伤。
+ * 按语句边界（;、&&、||、换行）切分命令，拦截任何位置的独立分钟级 sleep 语句。
+ * 判断对象是语义单元而非字符串形态：`sleep 570; x`、`cd y && sleep 580; z`、
+ * 独立 `sleep 90` 全部命中；循环体内的短 sleep（`do sleep 5`）、非独立段与低于阈值的一律放行。
  */
-export function validateBashPrefixSleep(command: string): ToolValidationFailure | null {
-  const trimmed = command.trim()
-  const match = BASH_PREFIX_SLEEP_PATTERN.exec(trimmed)
-  if (!match) return null
+const STATEMENT_SPLIT_PATTERN = /;|&&|\|\||\n/
+/** 纯 sleep 语句段：整段只有 sleep 与其时长参数（GNU sleep 支持多参数相加与 s/m/h/d 后缀）。 */
+const PURE_SLEEP_STATEMENT_PATTERN = /^sleep((?:\s+[0-9]+(?:\.[0-9]+)?[smhdSMHD]?)+)$/
 
+export function validateBashLongSleepStatement(command: string): ToolValidationFailure | null {
+  let longestSeconds = 0
+  for (const rawSegment of command.split(STATEMENT_SPLIT_PATTERN)) {
+    const match = PURE_SLEEP_STATEMENT_PATTERN.exec(rawSegment.trim())
+    if (!match) continue
+    const seconds = sumSleepStatementArgs(match[1] ?? '')
+    if (seconds > longestSeconds) longestSeconds = seconds
+  }
+  if (longestSeconds < BASH_SLEEP_STATEMENT_DENY_SECONDS) return null
+
+  const seconds = Math.round(longestSeconds)
+  return {
+    behavior: 'deny' as const,
+    message: `Bash command contains a standalone sleep of ~${seconds}s. Do not use Bash as a timer: it blocks one tool call for the whole delay. Wait on the condition, not the clock: prefer a command that exits when the state changes (e.g. gh pr watch <n> --interval 15), a conditional loop that breaks on success (for i in $(seq 1 60); do <check> && break; sleep 10; done), the WaitFor tool (server-side polling that wakes you when the check passes), or a Proma automation for recurring checks.`,
+  }
+}
+
+function sumSleepStatementArgs(args: string): number {
   let totalSeconds = 0
-  const args = /\s+([0-9]+(?:\.[0-9]+)?)([smhdSMHD]?)/g
+  const pattern = /\s+([0-9]+(?:\.[0-9]+)?)([smhdSMHD]?)/g
   let arg: RegExpExecArray | null
-  while ((arg = args.exec(match[1] ?? '')) !== null) {
+  while ((arg = pattern.exec(args)) !== null) {
     const value = Number.parseFloat(arg[1] ?? '0')
     const unit = (arg[2] || 's').toLowerCase()
     const factor = unit === 'm' ? 60 : unit === 'h' ? 3_600 : unit === 'd' ? 86_400 : 1
     totalSeconds += value * factor
   }
-  if (totalSeconds < BASH_PREFIX_SLEEP_DENY_SECONDS) return null
-
-  const seconds = Math.round(totalSeconds)
-  return {
-    behavior: 'deny' as const,
-    message: `Bash command starts with a sleep of ~${seconds}s. Do not use Bash as a timer: it blocks one tool call for the whole delay. Wait on the condition, not the clock: prefer a command that exits when the state changes (e.g. gh pr watch <n> --interval 15), a conditional loop that breaks on success (for i in $(seq 1 60); do <check> && break; sleep 10; done), the WaitFor tool (server-side polling that wakes you when the check passes), or a Proma automation for recurring checks.`,
-  }
+  return totalSeconds
 }

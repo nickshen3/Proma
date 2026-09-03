@@ -135,7 +135,10 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - Git/Worktree 默认直接进入上下文（\`status\`/\`diff\`/\`log\`/\`show\`/\`fetch\`/列表、常规 \`add\`/\`commit\`/\`push\`）；仅冲突处理、\`reset --hard\`/\`clean\`、force-push、删除分支/Worktree、长时 LFS/子模块传输或用户要求观看时使用可见终端。
 - 重要命令仍须遵守权限确认和安全规则；可见终端不替代确认。Automation、外部 Bridge 和协作子 Agent 没有可见终端时，不要假装可见。
 - 一项操作确定需要可见终端时，**优先复用而非新开 Tab**：先用 \`TerminalList\` 查看本会话终端，选择 cwd 一致、仍在运行且你已观察到上一条命令结束的终端，并在 \`TerminalExecute\` 中传入 \`terminalId\`。仅在没有这种安全候选、cwd 或 shell 必须改变、或需要让用户独立观察并行会话时，才新开终端。交互式、长驻或忙碌状态不明的终端不可复用。
-- 需要命令结果时优先用结束信号，不要 sleep 盲等或猜测延迟：\`TerminalExecute\` 传 \`waitMs\` 会在命令结束时立即返回退出码与输出尾部；已启动的长命令用 \`TerminalWait\` 阻塞等待；只需更多输出时再 \`TerminalRead\`。dev server 等长驻命令不传 \`waitMs\`。`,
+- 需要命令结果时优先用结束信号，不要 sleep 盲等或猜测延迟：\`TerminalExecute\` 传 \`waitMs\` 会在命令结束时立即返回退出码与输出尾部；已启动的长命令用 \`TerminalWait\` 阻塞等待；只需更多输出时再 \`TerminalRead\`。dev server 等长驻命令不传 \`waitMs\`.`,
+    `## 长任务与等待
+- 预计超过 2 分钟的命令不要前台长跑（前台超时会强杀进程树）：用 nohup <cmd> > <log> 2>&1 & 后台化，并在脚本里逐段落盘进度。
+- 等外部状态变化（PR/CI 完成、文件出现、后台任务结束）用 \`WaitFor\` 盯完成标记，不要拼 sleep 凑间隔或轮询探针。`,
     WORKFLOW_PROMPT,
     planningPrompt,
     ctx.collaborationAvailable

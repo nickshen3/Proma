@@ -1,19 +1,19 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  validateBashPrefixSleep,
+  validateBashLongSleepStatement,
   validateToolInput,
 } from './agent-tool-input-validator'
 
 /**
- * Bash 前缀分钟级 sleep 拦截：
- * 真实案例是子 Agent 用 `sleep 570; <检查命令>` + timeout 600 凑十分钟轮询间隔，
- * 一次工具调用被空转占用数分钟。拦截仅针对“以 sleep 开头且总时长 ≥ 60s”，
- * 循环体内的短 sleep、非开头的 sleep 字样、短延迟一律放行，保持低误伤。
+ * Bash 独立分钟级 sleep 语句拦截（按语句段切分，不限位置）：
+ * 真实案例是子 Agent 用 `sleep 570; <检查>` 与 `cd … && sleep 580; <检查>` 凑十分钟轮询间隔，
+ * 一次工具调用被空转占用数分钟。拦截语义是“任何位置的独立分钟级 sleep 语句”，
+ * 循环体内的短 sleep、非独立段、短延迟一律放行，保持低误伤。
  */
 
-describe('validateBashPrefixSleep', () => {
+describe('validateBashLongSleepStatement', () => {
   test('拦截真实案例形态：sleep 570 后接检查命令', () => {
-    const failure = validateBashPrefixSleep('sleep 570; cd "D:\\ai-workspace\\人力资源" && git branch --show-current')
+    const failure = validateBashLongSleepStatement('sleep 570; cd "D:\\ai-workspace\\人力资源" && git branch --show-current')
     expect(failure?.behavior).toBe('deny')
     expect(failure?.message).toContain('~570s')
     expect(failure?.message).toContain('Do not use Bash as a timer')
@@ -23,30 +23,39 @@ describe('validateBashPrefixSleep', () => {
     expect(failure?.message).toContain('WaitFor')
   })
 
+  test('拦截非开头位置的独立 sleep：cd 前缀与命令中段都能命中', () => {
+    const probe = 'cd /d/ai-workspace/金融 && sleep 580; python -c "csv mtime"; powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Measure-Object).Count"'
+    const failure = validateBashLongSleepStatement(probe)
+    expect(failure?.behavior).toBe('deny')
+    expect(failure?.message).toContain('~580s')
+    expect(validateBashLongSleepStatement('cd /d/ai-workspace/金融 && sleep 590; python -c "x"')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('echo start; sleep 90; echo done')?.behavior).toBe('deny')
+  })
+
   test('拦截 &&、换行与纯 sleep 三种前缀形态', () => {
-    expect(validateBashPrefixSleep('sleep 90 && git status')?.behavior).toBe('deny')
-    expect(validateBashPrefixSleep('sleep 120\ngit log -1')?.behavior).toBe('deny')
-    expect(validateBashPrefixSleep('   sleep 300')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 90 && git status')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 120\ngit log -1')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('   sleep 300')?.behavior).toBe('deny')
   })
 
   test('支持 s/m/h/d 单位换算与多参数相加', () => {
-    expect(validateBashPrefixSleep('sleep 2m; gh pr list')?.behavior).toBe('deny')
-    expect(validateBashPrefixSleep('sleep 1.5h; echo later')?.behavior).toBe('deny')
-    expect(validateBashPrefixSleep('sleep 1d; echo tomorrow')?.behavior).toBe('deny')
-    expect(validateBashPrefixSleep('sleep 30 40; echo 70s')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 2m; gh pr list')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 1.5h; echo later')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 1d; echo tomorrow')?.behavior).toBe('deny')
+    expect(validateBashLongSleepStatement('sleep 30 40; echo 70s')?.behavior).toBe('deny')
   })
 
   test('放行低于 60s 的短延迟', () => {
-    expect(validateBashPrefixSleep('sleep 5; curl localhost:5173')).toBeNull()
-    expect(validateBashPrefixSleep('sleep 45')).toBeNull()
-    expect(validateBashPrefixSleep('sleep 0.5m; echo 30s')).toBeNull()
+    expect(validateBashLongSleepStatement('sleep 5; curl localhost:5173')).toBeNull()
+    expect(validateBashLongSleepStatement('sleep 45')).toBeNull()
+    expect(validateBashLongSleepStatement('sleep 0.5m; echo 30s')).toBeNull()
   })
 
-  test('放行非前缀 sleep：循环体内、命令中部与仅提及字样', () => {
-    expect(validateBashPrefixSleep('for i in 1 2 3; do sleep 5; curl -sf localhost:5173 && break; done')).toBeNull()
-    expect(validateBashPrefixSleep('echo "sleep 600"; date')).toBeNull()
-    expect(validateBashPrefixSleep('sleepy 5; echo typo')).toBeNull()
-    expect(validateBashPrefixSleep('watch -n 60 "git status"')).toBeNull()
+  test('放行非独立 sleep 语句：循环体、子 shell 与命令内联', () => {
+    expect(validateBashLongSleepStatement('for i in 1 2 3; do sleep 5; curl -sf localhost:5173 && break; done')).toBeNull()
+    expect(validateBashLongSleepStatement('(sleep 300; bg-task) &')).toBeNull()
+    expect(validateBashLongSleepStatement('echo "sleep 600"; date')).toBeNull()
+    expect(validateBashLongSleepStatement('watch -n 60 "git status"')).toBeNull()
   })
 })
 
@@ -67,7 +76,7 @@ describe('validateToolInput 接入', () => {
     expect(validateToolInput('TerminalExecute', { command: 'echo hi' })).toBeNull()
   })
 
-  test('WaitFor：必填 command，且检查命令以前缀 sleep 开头会被引导纠正', () => {
+  test('WaitFor：必填 command，且检查命令含独立分钟级 sleep 会被引导纠正', () => {
     expect(validateToolInput('WaitFor', {})?.behavior).toBe('deny')
     const failure = validateToolInput('WaitFor', { command: 'sleep 120; gh pr view 42' })
     expect(failure?.behavior).toBe('deny')
