@@ -97,7 +97,9 @@ describe('更新安装包缓存清理', () => {
 
   test('Given 缓存状态无法持久化 When 下载完成 Then 不抛错且保留可安装文件', () => {
     const fixture = createFixture()
-    const cleanup = createUpdateCacheCleanup({ ...fixture, stateFilePath: join('/dev/null', 'updater-cache-state.json') })
+    // 状态文件落在已存在文件之下，mkdirSync 恒定 EEXIST：不用 POSIX 专用的 /dev/null，Windows 下同样失败。
+    const unreachableStatePath = join(fixture.downloadedFile, 'updater-cache-state.json')
+    const cleanup = createUpdateCacheCleanup({ ...fixture, stateFilePath: unreachableStatePath })
 
     expect(cleanup.recordDownloadedUpdate('0.20.0', fixture.downloadedFile)).toBe(false)
     expect(existsSync(fixture.downloadedFile)).toBe(true)
