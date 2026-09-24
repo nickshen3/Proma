@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_ROLE_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_ROLE_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -127,7 +127,7 @@ import type {
   PendingRequestsSnapshot,
   VaultCandidate,
   VaultDeleteInput,
-  VaultFileEntry,
+  VaultTreeEntry,
   VaultFocus,
   VaultReadResult,
   VaultRenameInput,
@@ -356,6 +356,15 @@ export interface ElectronAPI {
   /** 订阅登录期间，接收 Codex device code 与授权链接。返回取消订阅函数。 */
   onCodexOAuthDeviceCode: (callback: (deviceCode: import('@proma/shared').CodexOAuthDeviceCode) => void) => () => void
 
+  /** 发起 GitHub Copilot device-code OAuth 登录。enterpriseUrl 为空时登录 github.com。 */
+  githubCopilotOAuthLogin: (enterpriseUrl?: string) => Promise<import('@proma/shared').GithubCopilotOAuthLoginResult>
+
+  /** 取消进行中的 GitHub Copilot OAuth 登录 */
+  githubCopilotOAuthCancel: () => Promise<void>
+
+  /** 订阅登录期间，接收 GitHub Copilot device code 与授权链接。 */
+  onGithubCopilotOAuthDeviceCode: (callback: (deviceCode: import('@proma/shared').GithubCopilotOAuthDeviceCode) => void) => () => void
+
   /** 发起 xAI（Grok/X 订阅）OAuth 登录 */
   xaiOAuthLogin: () => Promise<XaiOAuthLoginResult>
 
@@ -402,14 +411,6 @@ export interface ElectronAPI {
 
   /** 搜索当前对话完整持久化历史（仅返回命中元数据） */
   searchConversationSessionMessages: (conversationId: string, query: string) => Promise<SessionMessageSearchResponse>
-
-  // ===== 教程 =====
-
-  /** 获取教程内容 */
-  getTutorialContent: () => Promise<string | null>
-
-  /** 创建欢迎对话（含教程附件） */
-  createWelcomeConversation: () => Promise<ConversationMeta | null>
 
   // ===== 消息发送 =====
 
@@ -513,7 +514,7 @@ export interface ElectronAPI {
   listVaultCandidates: () => Promise<VaultCandidate[]>
   selectVault: (options?: { inboxPath?: string; allowAgentWrites?: boolean }) => Promise<VaultSummary | null>
   authorizeDiscoveredVault: (rootPath: string, options?: { inboxPath?: string; allowAgentWrites?: boolean }) => Promise<VaultSummary>
-  listVaultFiles: () => Promise<VaultFileEntry[]>
+  listVaultFiles: () => Promise<VaultTreeEntry[]>
   readVaultFile: (relativePath: string) => Promise<VaultReadResult>
   resolveVaultMedia: (noteRelativePath: string, src: string) => Promise<import('@proma/shared').ResolvedFileUrl | null>
   saveVaultPastedImage: (input: VaultSavePastedImageInput) => Promise<{ src: string } | null>
@@ -723,6 +724,9 @@ export interface ElectronAPI {
   /** 保存工作区 MCP 配置；显式关闭的条目会取消进行中的验证。 */
   saveWorkspaceMcpConfig: (workspaceSlug: string, config: WorkspaceMcpConfig, options?: import('@proma/shared').SaveWorkspaceMcpConfigOptions) => Promise<void>
 
+  /** 原子删除单个 MCP，保留其他条目的当前状态。 */
+  deleteWorkspaceMcp: (workspaceSlug: string, name: string) => Promise<WorkspaceMcpConfig>
+
   /** 刷新并持久化工作区 MCP 真实连接状态 */
   refreshMcpConnections: (workspaceSlug: string) => Promise<WorkspaceMcpConfig>
 
@@ -732,6 +736,8 @@ export interface ElectronAPI {
   /** 原子新增 MCP，并在初始启用时条件持久化验证结果。 */
   installMcpAndValidate: (workspaceSlug: string, name: string, entry: import('@proma/shared').McpServerEntry) => Promise<import('@proma/shared').McpInstallMutationResult>
   startMcpOAuth: (input: import('@proma/shared').StartMcpOAuthInput) => Promise<import('@proma/shared').McpOAuthStartResult>
+  /** 将 OAuth client secret 加密保存到系统 Keychain；不会回传给渲染器或 Agent。 */
+  saveMcpOAuthClientSecret: (input: import('@proma/shared').SaveMcpOAuthClientSecretInput) => Promise<void>
 
   /** 将静态 MCP API Key / Token 加密保存到系统 Keychain。 */
   saveMcpApiKey: (input: import('@proma/shared').SaveMcpApiKeyInput) => Promise<void>
@@ -747,9 +753,6 @@ export interface ElectronAPI {
 
   /** 测试 MCP 服务器连接 */
   testMcpServer: (workspaceSlug: string, name: string, entry: import('@proma/shared').McpServerEntry) => Promise<{ success: boolean; message: string }>
-
-  /** 启用或关闭 Proma 内置 MCP */
-  setBuiltinMcpEnabled: (workspaceSlug: string, id: string, enabled: boolean) => Promise<WorkspaceCapabilities>
 
   /** 获取工作区 Skill 列表（含活跃和不活跃） */
   getWorkspaceSkills: (workspaceSlug: string) => Promise<SkillMeta[]>
@@ -875,14 +878,8 @@ export interface ElectronAPI {
   /** 获取所有工具信息 */
   getChatTools: () => Promise<ChatToolInfo[]>
 
-  /** 获取工具凭据 */
-  getChatToolCredentials: (toolId: string) => Promise<Record<string, string>>
-
   /** 更新工具开关状态 */
   updateChatToolState: (toolId: string, state: ChatToolState) => Promise<void>
-
-  /** 更新工具凭据 */
-  updateChatToolCredentials: (toolId: string, credentials: Record<string, string>) => Promise<void>
 
   /** 创建自定义工具 */
   createCustomChatTool: (meta: ChatToolMeta) => Promise<void>
@@ -892,9 +889,6 @@ export interface ElectronAPI {
 
   /** 监听自定义工具配置变更 */
   onCustomToolChanged: (callback: () => void) => () => void
-
-  /** 测试工具连接 */
-  testChatTool: (toolId: string) => Promise<{ success: boolean; message: string }>
 
   // ===== AskUserQuestion 交互式问答 =====
 
@@ -1230,6 +1224,18 @@ export interface ElectronAPI {
   stopDingTalkBot: (botId: string) => Promise<void>
   /** 获取多 Bot 状态 */
   getDingTalkMultiStatus: () => Promise<import('@proma/shared').DingTalkMultiBridgeState>
+
+  // ===== Slack 集成 =====
+
+  getSlackConfig: () => Promise<import('@proma/shared').SlackSettingsConfig>
+  saveSlackBotConfig: (input: import('@proma/shared').SlackBotConfigInput) => Promise<import('@proma/shared').SlackBotSettingsConfig>
+  removeSlackBot: (botId: string) => Promise<boolean>
+  getSlackManifest: (options?: { botName?: string }) => Promise<import('@proma/shared').SlackAppManifestResult>
+  testSlackConnection: (botToken: string) => Promise<import('@proma/shared').SlackTestResult>
+  startSlackBot: (botId: string) => Promise<void>
+  stopSlackBot: (botId: string) => Promise<void>
+  getSlackStatus: () => Promise<import('@proma/shared').SlackMultiBridgeState>
+  onSlackStatusChanged: (callback: (state: import('@proma/shared').SlackBotBridgeState) => void) => () => void
 
   // ===== 微信集成 =====
 
@@ -1634,6 +1640,20 @@ const electronAPI: ElectronAPI = {
     return () => ipcRenderer.removeListener(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_DEVICE_CODE, listener)
   },
 
+  githubCopilotOAuthLogin: (enterpriseUrl?: string) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GITHUB_COPILOT_OAUTH_LOGIN, enterpriseUrl)
+  },
+
+  githubCopilotOAuthCancel: () => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GITHUB_COPILOT_OAUTH_CANCEL)
+  },
+
+  onGithubCopilotOAuthDeviceCode: (callback: (deviceCode: import('@proma/shared').GithubCopilotOAuthDeviceCode) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, deviceCode: import('@proma/shared').GithubCopilotOAuthDeviceCode) => callback(deviceCode)
+    ipcRenderer.on(CHANNEL_IPC_CHANNELS.GITHUB_COPILOT_OAUTH_DEVICE_CODE, listener)
+    return () => ipcRenderer.removeListener(CHANNEL_IPC_CHANNELS.GITHUB_COPILOT_OAUTH_DEVICE_CODE, listener)
+  },
+
   xaiOAuthLogin: () => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.XAI_OAUTH_LOGIN)
   },
@@ -1695,15 +1715,6 @@ const electronAPI: ElectronAPI = {
 
   searchConversationSessionMessages: (conversationId: string, query: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SEARCH_SESSION_MESSAGES, conversationId, query)
-  },
-
-  // 教程
-  getTutorialContent: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT)
-  },
-
-  createWelcomeConversation: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.CREATE_WELCOME_CONVERSATION)
   },
 
   // 消息发送
@@ -2114,6 +2125,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG, workspaceSlug, config, options)
   },
 
+  deleteWorkspaceMcp: (workspaceSlug: string, name: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_MCP, workspaceSlug, name) as Promise<WorkspaceMcpConfig>
+  },
+
   refreshMcpConnections: (workspaceSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REFRESH_MCP_CONNECTIONS, workspaceSlug) as Promise<WorkspaceMcpConfig>
   },
@@ -2128,6 +2143,10 @@ const electronAPI: ElectronAPI = {
 
   startMcpOAuth: (input: import('@proma/shared').StartMcpOAuthInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.START_MCP_OAUTH, input)
+  },
+
+  saveMcpOAuthClientSecret: (input: import('@proma/shared').SaveMcpOAuthClientSecretInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_MCP_OAUTH_CLIENT_SECRET, input)
   },
 
   saveMcpApiKey: (input: import('@proma/shared').SaveMcpApiKeyInput) => {
@@ -2148,10 +2167,6 @@ const electronAPI: ElectronAPI = {
 
   testMcpServer: (workspaceSlug: string, name: string, entry: import('@proma/shared').McpServerEntry) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, workspaceSlug, name, entry) as Promise<{ success: boolean; message: string }>
-  },
-
-  setBuiltinMcpEnabled: (workspaceSlug: string, id: string, enabled: boolean) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BUILTIN_MCP_ENABLED, workspaceSlug, id, enabled)
   },
 
   getWorkspaceSkills: (workspaceSlug: string) => {
@@ -2361,16 +2376,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.GET_ALL_TOOLS)
   },
 
-  getChatToolCredentials: (toolId: string) => {
-    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.GET_TOOL_CREDENTIALS, toolId)
-  },
-
   updateChatToolState: (toolId: string, state: ChatToolState) => {
     return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.UPDATE_TOOL_STATE, toolId, state)
-  },
-
-  updateChatToolCredentials: (toolId: string, credentials: Record<string, string>) => {
-    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.UPDATE_TOOL_CREDENTIALS, toolId, credentials)
   },
 
   createCustomChatTool: (meta: ChatToolMeta) => {
@@ -2385,10 +2392,6 @@ const electronAPI: ElectronAPI = {
     const listener = (): void => callback()
     ipcRenderer.on(CHAT_TOOL_IPC_CHANNELS.CUSTOM_TOOL_CHANGED, listener)
     return () => { ipcRenderer.removeListener(CHAT_TOOL_IPC_CHANNELS.CUSTOM_TOOL_CHANGED, listener) }
-  },
-
-  testChatTool: (toolId: string) => {
-    return ipcRenderer.invoke(CHAT_TOOL_IPC_CHANNELS.TEST_TOOL, toolId)
   },
 
   // AskUserQuestion 交互式问答
@@ -2808,6 +2811,32 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, payload: import('@proma/shared').FeishuRegisterAppStatus) => callback(payload)
     ipcRenderer.on(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener)
     return () => { ipcRenderer.removeListener(FEISHU_IPC_CHANNELS.REGISTER_APP_STATUS, listener) }
+  },
+
+  // ===== Slack 集成 =====
+
+  getSlackConfig: () => ipcRenderer.invoke(SLACK_IPC_CHANNELS.GET_CONFIG),
+
+  saveSlackBotConfig: (input: import('@proma/shared').SlackBotConfigInput) =>
+    ipcRenderer.invoke(SLACK_IPC_CHANNELS.SAVE_BOT_CONFIG, input),
+
+  removeSlackBot: (botId: string) => ipcRenderer.invoke(SLACK_IPC_CHANNELS.REMOVE_BOT, botId),
+
+  getSlackManifest: (options?: { botName?: string }) =>
+    ipcRenderer.invoke(SLACK_IPC_CHANNELS.GET_MANIFEST, options),
+
+  testSlackConnection: (botToken: string) => ipcRenderer.invoke(SLACK_IPC_CHANNELS.TEST_CONNECTION, botToken),
+
+  startSlackBot: (botId: string) => ipcRenderer.invoke(SLACK_IPC_CHANNELS.START_BOT, botId),
+
+  stopSlackBot: (botId: string) => ipcRenderer.invoke(SLACK_IPC_CHANNELS.STOP_BOT, botId),
+
+  getSlackStatus: () => ipcRenderer.invoke(SLACK_IPC_CHANNELS.GET_STATUS),
+
+  onSlackStatusChanged: (callback: (state: import('@proma/shared').SlackBotBridgeState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: import('@proma/shared').SlackBotBridgeState): void => callback(state)
+    ipcRenderer.on(SLACK_IPC_CHANNELS.STATUS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(SLACK_IPC_CHANNELS.STATUS_CHANGED, listener) }
   },
 
   // ===== 微信集成 =====

@@ -7,7 +7,8 @@
 
 import { atom } from 'jotai'
 import type { Getter } from 'jotai'
-import { atomFamily, atomWithStorage, selectAtom } from 'jotai/utils'
+import { atomWithStorage, selectAtom } from 'jotai/utils'
+import { atomFamily } from 'jotai-family'
 import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
@@ -513,16 +514,8 @@ export const agentSidePanelOpenAtomFamily = atomFamily((sessionId: string) => at
   },
 ))
 
+/** 新 Agent 会话的右侧面板基线宽度；不继承旧版全局或其他会话的宽布局。 */
 const DEFAULT_AGENT_SIDE_PANEL_WIDTH = 460
-
-/**
- * 旧版全局宽度只作为尚未保存新布局的 Session 的初始基线，避免升级后尺寸回退。
- * 新布局写入后不再与其他 Session 共享。
- */
-const legacyAgentSidePanelWidthAtom = atomWithStorage<number>(
-  'proma-agent-workspace-width',
-  DEFAULT_AGENT_SIDE_PANEL_WIDTH,
-)
 
 export interface AgentSidePanelLayout {
   width: number
@@ -578,14 +571,14 @@ export const agentSidePanelLayoutMapAtom = atomWithStorage<Record<string, AgentS
 /** 指定 Agent Session 的右侧工作区布局。 */
 export const agentSidePanelLayoutAtomFamily = atomFamily((sessionId: string) => atom(
   (get) => get(agentSidePanelLayoutMapAtom)[sessionId] ?? {
-    width: get(legacyAgentSidePanelWidthAtom),
+    width: DEFAULT_AGENT_SIDE_PANEL_WIDTH,
     hasOpenedWideWorkspace: false,
     widePanelWidthOverride: null,
   },
   (get, set, update: AgentSidePanelLayout | ((previous: AgentSidePanelLayout) => AgentSidePanelLayout)) => {
     set(agentSidePanelLayoutMapAtom, (previous) => {
       const current = previous[sessionId] ?? {
-        width: get(legacyAgentSidePanelWidthAtom),
+        width: DEFAULT_AGENT_SIDE_PANEL_WIDTH,
         hasOpenedWideWorkspace: false,
         widePanelWidthOverride: null,
       }
@@ -625,6 +618,43 @@ export function updateFileBrowserExpandedPath(
 
   const nextPaths = new Map(current)
   nextPaths.set(path, expanded)
+  const next = new Map(state)
+  next.set(stateKey, nextPaths)
+  return next
+}
+
+/**
+ * 目录重命名/移动成功后，迁移当前文件树中该目录及后代的显式展开/折叠记录。
+ * 路径按目录边界匹配，不影响同名前缀的兄弟目录或其他文件树；清除目标位置
+ * 可能残留的旧记录，避免新搬来的目录继承之前同名目录的展开状态。
+ */
+export function relocateFileBrowserExpandedPath(
+  state: Map<string, Map<string, boolean>>,
+  stateKey: string,
+  oldPath: string,
+  newPath: string,
+): Map<string, Map<string, boolean>> {
+  const current = state.get(stateKey)
+  if (!current || oldPath === newPath) return state
+
+  const isWithin = (path: string, parent: string): boolean => {
+    // FileEntry 使用绝对路径；仅 Windows 盘符/UNC 路径把反斜杠视为分隔符。
+    // POSIX 文件名可以包含反斜杠，不能误迁移 a\\sibling 这样的兄弟目录。
+    const isWindowsPath = /^[a-z]:[/\\]/i.test(parent) || parent.startsWith('\\\\')
+    return path === parent || path.startsWith(parent + '/') || (isWindowsPath && path.startsWith(parent + '\\'))
+  }
+  const nextPaths = new Map(current)
+  let changed = false
+  for (const path of current.keys()) {
+    if (isWithin(path, oldPath) || isWithin(path, newPath)) {
+      nextPaths.delete(path)
+      changed = true
+    }
+  }
+  if (!changed) return state
+  for (const [path, expanded] of current) {
+    if (isWithin(path, oldPath)) nextPaths.set(newPath + path.slice(oldPath.length), expanded)
+  }
   const next = new Map(state)
   next.set(stateKey, nextPaths)
   return next
@@ -845,8 +875,12 @@ export const revealChangedWorkspaceComponentAtom = atom(
     ))
 
     const activeTab = get(agentDiffPanelTabAtom).get(sessionId)
-    const preservesUserFocus = get(agentSidePanelOpenAtomFamily(sessionId))
-      && isUserPriorityWorkspaceComponentTab(activeTab)
+    const panelOpen = get(agentSidePanelOpenAtomFamily(sessionId))
+    // MCP 的受控配置成功后必须让 Tab 可见，但配置结果不应打断用户正在阅读
+    // 文件、变更或其他工作区内容。右侧已打开时仅添加 Tab；尚未打开时才以 MCP 打开。
+    if (component === 'mcp' && panelOpen) return
+
+    const preservesUserFocus = panelOpen && isUserPriorityWorkspaceComponentTab(activeTab)
     if (preservesUserFocus) return
 
     set(agentSidePanelOpenAtomFamily(sessionId), true)
